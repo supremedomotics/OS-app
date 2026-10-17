@@ -20,6 +20,14 @@ Tests run (no code change): secure 87 pass with local vectors / 65 + 22 skipped 
 (4 values altered) → 5 failures, copy deleted. Vectors remain outside Git (`knx-licensed/` ignored; none tracked). `knxultimate`, production registration, package.json, lockfile, flags, policy.ts unchanged.
 Next: obtain Core v2 + Overview + AN183 statement (answers to the 11 questions); then T1/T2; then T3/T4 in the simulator; hardware bench list in the architecture doc §6. No PR opened.
 
+## Session: KNX Secure — specification re-inspection + replay-safety gate (no wire change)
+
+Start HEAD `3059eb3` (clean). Archive re-inspected: only the 12-PDF subset exists (no Core v2, Overview, standalone AN183, EITT, Resources, Volume 6, keyring format); MyKNX not reachable from the sandbox — exact pull list in `knx-secure-spec-acquisition.md` §D.
+New facts from existing text: Tunnelling Table 11/§2: E_NO_ERROR 00h, E_TUNNELLING_LAYER 29h, E_NO_MORE_UNIQUE_CONNECTIONS 25h (B1 narrowed); NL §2.4.2.4.5.7.5 scopes IP System Broadcast to routers, "tunnel" absent from NL/TL/AL (B2 partial, not concluded);
+TSSK 2.5.19/2.5.20 corroborate TUN §2.6.2 (T). Replay review (`security review §10`): session layer rejects duplicates/replays/reorder/cross-session; NOT prevented: held-back tail frames (G-R1), application retries (G-R2), unknown outcome after session loss (G-R3) → strategy S1–S6, no tunnel-layer dedupe, no wire change.
+Code (`4d3e5b9`): client key-pair reuse guard, `connect()` releases TCP when `start()` refuses, `SecureStreamTunnelLink.sessionDiagnostics()`, `stream-replay.test.ts` (14). `src/knx`: 811 with vectors / 789 + 22 skipped without. Production, `knxultimate`, lockfile, policy, flags untouched; stream link still simulator-only.
+Next: user uploads Core, Overview, AN183 (or KNX written answer) → verify B3/B4/B5/B8/B2, re-evaluate `STREAM_RULES`; build the S3 per-capability replay policy before any adapter (T5).
+
 ## Session: KNX stream-mode tunnelling over the secure session (T2) — simulator only
 
 Start HEAD `51c8b0b` (clean, in sync). Added `tunnel-rules.ts` (fail-closed registry: 4 rules verified from TUN v01.07.01 §2.6.2 — no ACK sent, received ACK ignored, receive sequence not evaluated,

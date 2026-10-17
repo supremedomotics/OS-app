@@ -139,3 +139,38 @@ no longer suppressed at the tunnel layer — replay protection rests entirely on
 which the tests exercise unchanged. A server (or anything holding the session key) can therefore make the client deliver the same telegram repeatedly; that is within the trust of an authenticated
 session and is inherent in §2.6.2. The stream tunnel cannot start unless the secure session authenticated the server (D1) and cannot be constructed on a real transport (rules B1/B3/B4/B5/B8 unverified).
 No new wire format, no nonce or serial change (B9 unchanged), no credential handling change. Unresolved: F5, F7, F8, B9, plus the open stream blockers above.
+
+## 10. Replay-safety review of stream-mode tunnelling (2026-10-17)
+
+**Principle.** Authentication (MAC) proves who produced a frame; replay prevention proves it is not an *old* frame. A captured wrapper is fully authentic. Three independent mechanisms exist and each was checked in code and by test
+(`secure/stream-replay.test.ts`, 14 tests; `ip-session.test.ts`): (1) per-direction 48-bit sequence number, discard ≤ last accepted, check before MAC (allowed) but advance only after MAC (IPS §2.2.1.3.3, §2.2.3.3 — N; the "advance after MAC" part is decision I);
+(2) a fresh ECDH key pair per session, so a wrapper from another session fails the MAC even with an identical session id (§2.2.3.1.1 — N); (3) SESSION_RESPONSE is bound to this handshake's X (MAC over X⊕Y) so an old response is rejected (§2.2.3.7 — N). The tunnel-layer sequence number contributes **nothing** (TUN §2.6.2: not evaluated).
+
+| Case | Outcome | Mechanism / evidence | Class |
+|---|---|---|---|
+| Duplicate network delivery of one wrapper (either direction) | processed once; duplicates counted `replay` | (1); tests A1, A2 | N |
+| Captured authentic wrapper re-injected later in the same session | not processed again | (1); test B1 | N |
+| Reordering (older wrapper after a newer one) | older dropped, telegram **lost**, never replayed | (1); test B2 | N |
+| Held-back **tail** frame released later | **accepted** whenever released while the session lives and nothing newer arrived | no freshness field in unicast wrappers; test B3 `KNOWN LIMITATION` | **gap G-R1** |
+| Same, client→server | bounded by the server's 60 s session timeout (released frames hit a dead session) | §2.2.3.5.2 A5; test B4 (server model) | N (model) |
+| Same, server→client | **unbounded** on the client (no inbound liveness/watchdog; F5/B4) | test B3 | gap G-R1 / B4 |
+| Application retry (new wrapper, same payload) | accepted and executed again; distinct increasing sequence numbers | not a replay; tests C1, C3 | **gap G-R2 (by design)** |
+| Tunnel retransmission by the stack | never happens in stream mode (no ACK ⇒ nothing to repeat); verified over 5 minutes | TUN §2.6.2; test C2 | N + I |
+| Reconnect / new session: old wrapper (other id) | rejected (`wrongSession`) | tests D1 | N |
+| …old wrapper, same session id | rejected by MAC (fresh key) | test D2 (counter advanced so only the key can reject) | N |
+| Client command wrapper from session A into session B (server model) | not executed | test D3 | N (model) |
+| Old SESSION_RESPONSE into a new handshake | `server_authentication_failed` | test D4 | N |
+| Client key pair reused across sessions (generator seam, stuck RNG) | **refused** (new) | §2.2.3.1.1 "shall"; test D5 | N rule, I enforcement |
+| Outcome of an in-flight command when the session dies | UNKNOWN (`confirmation: not_confirmed`) | tests in `stream-tunnel.test.ts` | gap G-R3 |
+
+**Side-effect commands (switching, blinds, locks, HVAC).** The session layer guarantees that *the same authenticated wrapper* is acted on at most once and never across sessions. It does **not** give exactly-once for *intent*: if an application re-sends after an unknown outcome,
+the device may receive two distinct authentic commands. For absolute, idempotent commands (switch on/off, set level, setpoint) that is harmless; for relative/toggle/step, scene triggers, locks, alarms and HVAC mode changes it is not.
+
+**Duplicate-handling strategy (design; no wire change, no tunnel-layer dedupe):**
+S1 the stream tunnel never retransmits (enforced + tested); S2 callers receive honest delivery state (`transportAck: "none"` + `confirmation`, `not_confirmed` = unknown);
+S3 the planned per-capability replay policy (parity matrix stage 7) must **never auto-resend** non-idempotent classes and locks/security after an unknown outcome, and may resend an idempotent absolute command once only after a status read-back shows the target state was not reached;
+S4 no content-based inbound de-duplication (it would swallow legitimate repeated bus telegrams and is not in the specification); S5 receive-path freshness (a client watchdog) waits for the Core v2 liveness rules (B4) — a locally invented timeout would be a guess;
+S6 time-critical security commands should not be sent over a session whose liveness is unverified (policy for the future adapter).
+
+**Findings fixed this session:** R4 (Low) key-pair generator seam could defeat cross-session replay protection → process-wide reuse guard (I); R5 (Low) `SecureSessionConnection.connect()` left the TCP connection open when `start()` refused → released, regression test.
+**Open:** G-R1 (freshness), G-R2/G-R3 (policy, adapter-level), F5, F7, F8, B9, and the five blocked stream rules. Confirmation matching in the tunnel client is by (destination, service) FIFO; a duplicated *authentic* L_Data.con from the server could settle a later pending send early — it requires the authenticated server and is not suppressible without tunnel sequence numbers (low).

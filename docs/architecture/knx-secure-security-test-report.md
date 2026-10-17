@@ -136,3 +136,20 @@ Code commit: see the final report / `git log` (subject "feat(knx-native): simula
 Pre-existing assertions were not modified. Mutation checks (each reverted, each failed named tests): stream path ACKs/evaluates sequence (3), ACKs processed (1), heartbeat enabled (1),
 DISCONNECT_REQUEST path (2), construction guard removed (2), stream sequence counter (1), response to server DISCONNECT (1), `isSimulated` always true (2).
 Classes: simulator (all 27) — self-authored server; not conformance, not hardware.
+
+## Addendum 5 — specification re-inspection and replay-safety gate (2026-10-17)
+Commit `4d3e5b9` (code/tests) + docs commit. Linux sandbox, Node 22, simulator + loopback only. **No hardware, no conformance run, no new specification documents (archive re-inspected: 12 PDFs only).**
+
+| Run | Passed | Failed | Skipped |
+|---|---|---|---|
+| `src/knx` before (`3059eb3`), with / without vectors | 796 / 774 | 0 / 0 | 0 / 22 |
+| `src/knx` after, **with** licensed vectors | **811** | 0 | 0 |
+| `src/knx` after, **without** vectors | **789** | 0 | **22** (spec-vector tests, reported separately, never counted as passed) |
+| `src/knx/native/secure` with / without vectors | 143 / 121 | 0 / 0 | 0 / 22 |
+| `stream-replay.test.ts` (new, 3 runs stable) | 14 | 0 | 0 |
+| `ip-session.test.ts` (+1 start()-refusal test) | 43 | 0 | 0 |
+| classic: `tunnel-client` 37 + `wire` 11 + `udp-socket` 3 + `tcp-socket` 24; `stream-tunnel` 27 | 75; 27 | 0 | 0 |
+| `tsc --noEmit`, `npm run build` | clean | — | — |
+
+Mutation checks (each reverted): sequence check removed → 5 failures; counter advanced before MAC → 1; key-reuse guard removed → 1; TCP not released on refused start → 1 (found by adding a test after the first mutation run showed the original suite did not detect it);
+server replay check removed → 1. Pre-existing assertions unchanged. Conformance-vector tests: skipped without the local licensed file, executed (and passing) with it.

@@ -218,3 +218,29 @@ five rules still unverified (B1, B3, B4, B5, B8) no real transport can ever run 
 
 Ambiguities recorded (none resolved by guessing): (A1) §2.6.2 does not say how a sender knows a TCP send "succeeded"; (A2) "may set the sequence counter to zero" does not say whether a
 sender may *also* count — a receiver must accept either, so zero is safe; (A3) whether "ignored" ACKs should be logged is unspecified — they are counted, not acted on.
+
+## 7. Update 2026-10-17 — archive re-inspection, partial evidence, decision reassessment
+
+**B1 (status codes) — narrowed.** Verified from Tunnelling v01.07.01: `E_NO_ERROR` 00h and `E_TUNNELLING_LAYER` 29h (Table 11), `E_NO_MORE_UNIQUE_CONNECTIONS` 25h (N). Names without values in the supplied text: E_CONNECTION_ID, E_CONNECTION_TYPE,
+E_CONNECTION_OPTION, E_NO_MORE_CONNECTIONS, E_DATA_CONNECTION, E_KNX_CONNECTION → still **U**. No behaviour depends on a numeric code in stream mode (registry rule `statusCodes` stays blocked until the rest are verified).
+**B2 (AN183) — partial, still BLOCKED for a conclusion.** Evidence (N-scope): Network Layer v02.01.01 §2.4.2.4.5.7.5 defines IP System Broadcast handling for the *KNXnet/IP Router* (PID_IP_SBC_CONTROL) and "tunnel" does not occur in NL/TL/AL, so no supplied text
+imposes it on a group-telegram tunnelling client [Likely not applicable]. The standalone AN183 and the integration (marked "started" only) are absent, so applicability is **not verified**; AN183 constants appear in TSSK 2.4 (router tests).
+**B3, B4, B5, B8 — unchanged:** Core v2 / Overview not in the archive (see acquisition plan §D).
+
+**Reassessment of the stream-mode decisions** (each re-read against TUN §2.6.2, TSSK 2.5.19/2.5.20/2.7.6 and the code):
+
+| Decision | Class | Evidence | Effect on real-transport readiness |
+|---|---|---|---|
+| Receiver does not evaluate the tunnel sequence counter | **N** | TUN §2.6.2; **T** TSSK 2.5.19 (accepts constant 42), Core v2 2017 draft §2.2.3.2.4.1 | none — verified |
+| Send no TUNNELLING_ACK | **N** | TUN §2.6.2, §3.1; **T** TSSK 2.5.20, 2.7.6 | none — verified |
+| Ignore received TUNNELLING_ACK (and never treat it as an error / close) | **N** (ignore) + **T** (TSSK 2.5.20 fails a BDUT that closes on an ACK) | as above | none — verified |
+| Send sequence 0 | **N-permitted** ("may"); **T** (BDUT may send any values) | TUN §2.6.2 | none — permitted choice |
+| Count ignored ACKs (`ignoredAcks`) | **I** | – | none (no wire effect) |
+| A stream send "completes" when the secure session accepted the frame; receipt `transportAck: "none"` | **I** | consequence of "no ACK"; the text defines no completion event | none on the wire, but **callers must treat it as "handed to the session", never "delivered"**; delivery truth is `confirmation` (L_Data.con), and `not_confirmed` means UNKNOWN |
+| No tunnel-layer duplicate suppression | **N-mandated** for the sequence-based mechanism (not evaluated); suppression of *replays* is the secure session's job (N IPS §2.2.1.3.3/§2.2.3.3) | see security review §10 | none — but see replay gaps below |
+| Placeholders for HPAI, heartbeat, disconnect, status codes, partial frames | **U** (B3/B4/B5/B1/B8) | – | **real transport stays blocked** |
+
+None of the wire-visible stream decisions is unsupported; the real-transport block comes solely from the five unverified rows. A passing simulator suite proves none of the above (self-authored server).
+
+**Replay/duplicate gap register (details: security review §10, architecture §9):** G-R1 held-back tail frames are accepted (no freshness in unicast wrappers; receive path unbounded on the client until B4); G-R2 application retries are new authenticated messages
+(at-least-once, only the caller can judge idempotence); G-R3 delivery outcome after a session loss is UNKNOWN. G-R4/G-R5 (key-pair reuse seam; TCP left open when `start()` refuses) were fixed (class I).

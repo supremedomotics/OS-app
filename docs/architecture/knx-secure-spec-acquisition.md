@@ -116,3 +116,31 @@ Legend — **Published?**: can the question be settled from the published specif
 | 10 | Conformance templates / certification | **Written clarification** | T: TSSK v1.1 AS (2018) describes server-side tests only; no EITT templates; no client certification procedure known | Are EITT templates or a client-side test procedure available? What certification is required to ship a product claiming KNX Secure as a *client*? Is TSSK re-baselined against IPS v01.01.02? |
 
 Items 3 and (partly) 8 were closed or narrowed by reading the supplied text; everything else needs a document we do not have (5–7) or a written statement (1, 2, 4, 9, 10).
+
+### D. Archive re-inspection and access status (2026-10-17)
+
+**What exists in the working environment (checked, not assumed).** The only licensed material is the user-supplied `KNX_Secure_Claude_Bundle.zip` (13 245 516 bytes upload; identical to the working copy
+`raw/bundle.zip`, `cmp` equal): `README_FIRST.txt` + 12 PDFs. There is **no** 199-entry `The KNX Standard v3.0.0.zip` in the container, no other archive, no PDF elsewhere on the filesystem. Extracted
+text exists for all 12. Inventory (title → role): 03_08_09 KNX IP Secure v01.01.02 AS · 03_08_04 Tunnelling v01.07.01 AS · 03_03_07 Application Layer v02.01.01 AS · 03_03_03 Network Layer v02.01.01 AS ·
+03_03_04 Transport Layer v01.02.03 AS · AN193 v04 · AN194 v02 · AN192 v06 Coupler security extensions AS · AN169 v03 Secure PB-Mode configuration DV · AN209 update 8 (TSSJ r3) · TSSK v1.1 AS · TSSJ v1.11 AS.
+**MyKNX:** the container has no outbound route to knx.org / my.knx.org (HTTP status 000 on a probe) and no MyKNX credentials, so the user's access route cannot be exercised from here; documents can only reach
+the session as an uploaded archive. Nothing was downloaded, nothing licensed was committed (tree scan for the 35 long vector values: 0 hits).
+
+**Searched in the 12 documents for the blocking content — result:**
+
+| Needed | Present? | Evidence |
+|---|---|---|
+| KNXnet/IP Core (v2) text: TCP HPAI rules, heartbeat, disconnect, receive timeouts, frame sync | **No** | `grep` for CONNECTIONSTATE_REQUEST finds only one IPS sentence; "heartbeat" appears once (TSSK); `TimeoutKnx…` constants exist only in TSSK |
+| KNXnet/IP Overview (status codes, timeout constants §5.8) | **No** | – |
+| AN183 / KNXnet/IP System Broadcast text | **No** (standalone); **partial scope evidence** | NL v02.01.01 change table "AN183 integration started 2020.10.27"; NL §2.4.2.4.5.7.5 scopes IP System Broadcast handling to the *KNXnet/IP Router* (PID_IP_SBC_CONTROL); the word "tunnel" occurs **0** times in NL, TL, AL |
+| EITT templates / client-side certification procedure | **No** | TSSK is descriptions only |
+| Volume 6 Profiles, Resources 3/5/1, keyring format | **No** | – |
+
+**Newly extracted, usable facts (N unless stated):** Tunnelling v01.07.01 Table 11: **E_NO_ERROR = 00h**, **E_TUNNELLING_LAYER = 29h**; §2.x text: **E_NO_MORE_UNIQUE_CONNECTIONS = 25h** (and §4.3 client behaviour).
+Numeric values of E_CONNECTION_ID, E_CONNECTION_TYPE/OPTION, E_NO_MORE_CONNECTIONS, E_DATA_CONNECTION, E_KNX_CONNECTION are *named* but **not valued** in any supplied text (U; our code's 0x21–0x24, 0x26, 0x27 remain unverified).
+T: TSSK 2.5.19/2.5.20 (citing Core v2 2017.04 §2.2.3.2.4.1 / §2.2.3.4) corroborate §2.6.2 for *all* connection types: a server must accept constant sequence values (42, 0) over TCP, must not send ACKs and must not drop the
+connection when it receives one; the BDUT "may send any sequence counter values it wants".
+
+**Exact pull list for the person with MyKNX access** (titles as numbered in the bundle; revisions unknown to us — ask for the current Approved Standard of each, do not guess): (1) `03_08_02` KNXnet/IP Core (the revision integrating AN184 "Core v2"); (2) `03_08_01` KNXnet/IP Overview;
+(3) AN183 "KNXnet/IP System Broadcast" (standalone, current) — or written confirmation it does not apply to tunnelling clients; (4) the EITT test templates / any client-side conformance procedure for KNXnet/IP Secure; (5) `03_05_01` Resources; (6) Volume 6 Profiles; (7) the ETS keyring file format description.
+Upload as one archive with the same folder layout; keep it outside Git. Until then each item stays **BLOCKED — document not available**, and it blocks exactly the rows named in `knx-secure-blocker-matrix.md` (Core → B3, B4, B5, B8; Overview → B1; AN183 → B2; EITT → conformance claims; keyring → B6 completion).

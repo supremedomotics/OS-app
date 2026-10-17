@@ -120,3 +120,11 @@ mid-send settles every promise exactly once; session close ⇒ tunnel closed ⇒
   malformed frames and a disconnect.
 * **Not done / still blocked:** B1, B3, B4, B5, B8 (see blocker matrix §6); stream-mode `TUNNELLING_FEATURE_*`; Extended CRI; any real-socket run; production wiring (T5).
 * Next gate: T3 needs KNXnet/IP Core v2 + Overview.
+
+## 9. Replay safety and duplicate handling in stream mode (2026-10-17)
+
+Stream mode removes the only tunnel-layer duplicate mechanism (sequence + ACK + identical retransmission) **because the specification mandates it** (TUN §2.6.2). Duplicate and replay protection therefore lives entirely in the secure session and in the caller's policy:
+* session layer (verified by tests, see security review §10): duplicates, replays, reordering and cross-session replays of wrappers are rejected; a client key pair can no longer be reused; a refused `start()` releases its TCP connection;
+* not provided by anything in the specification we hold: freshness of unicast wrappers (held-back tail frames), exactly-once intent across application retries, knowledge of the outcome after session loss;
+* required adapter contract (T5): treat `SendReceipt{transportAck:"none"}` as "handed to the session"; use `confirmation` for delivery; classify commands (idempotent-absolute vs everything else) before any automatic resend; never auto-resend locks/security/relative commands; surface `not_confirmed` as UNKNOWN.
+No change to the verified rules, no new wire field, no tunnel-layer sequence use. Real-transport use remains blocked by B1/B3/B4/B5/B8 (acquisition plan §D lists the documents).
