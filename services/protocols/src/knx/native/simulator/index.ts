@@ -4,3 +4,4 @@ export { VirtualKnxBus, VirtualActuator, VirtualSender, type BusTelegram, type A
 export { VirtualKnxInterface, type VirtualInterfaceOptions, type InterfaceFaults, type InterfaceCounters } from "./virtual-interface.js";
 export { VirtualStreamNetwork, VirtualConnection, type StreamTap, type Direction, type ServerSide } from "./virtual-stream.js";
 export { VirtualSecureGateway, ServerSession, type VirtualSecureGatewayOptions, type SecureGatewayFaults } from "./virtual-secure-gateway.js";
+export { VirtualStreamTunnelServer, type StreamTunnelServerOptions } from "./virtual-stream-tunnel-server.js";

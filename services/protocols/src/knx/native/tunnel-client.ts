@@ -28,12 +28,13 @@ import {
   NAT_HPAI, ServiceType, StatusCode, TunnelLayer,
 } from "./knxnetip-frame.js";
 import { assertPolicySatisfiable, PLAIN_POLICY, type SecurityPolicy } from "./security/policy.js";
+import { STREAM_RULES, unverifiedBlockers } from "./tunnel-rules.js";
 import { UdpTunnelLink, type TunnelLink } from "./tunnel-link.js";
 import { systemClock, type Clock, type SocketFactory, type TimerHandle } from "./transport.js";
 
 export type TunnelErrorCode =
   | "invalid_argument" | "not_connected" | "connect_timeout" | "connect_rejected" | "socket_error"
-  | "heartbeat_lost" | "ack_timeout" | "ack_error" | "gateway_disconnect" | "queue_full" | "closed";
+  | "heartbeat_lost" | "ack_timeout" | "ack_error" | "gateway_disconnect" | "queue_full" | "closed" | "session_closed";
 
 export class KnxTunnelError extends Error {
   constructor(readonly code: TunnelErrorCode, message: string, readonly status?: number) {
@@ -82,20 +83,33 @@ export interface SendInput {
 
 export type ConfirmationOutcome = "confirmed" | "bus_error" | "not_confirmed";
 
-export interface SendReceipt {
-  /** Tunnel sequence number the gateway acknowledged. */
+export type SendReceipt = (
+  | {
+    transportAck: "ack";
+    ackedAt: number;
+    /** Time from first transmission to ACK (ms) — gateway responsiveness. */
+    ackLatencyMs: number;
+  }
+  | {
+    /** Stream mode (TUN §2.6.2): there is no TUNNELLING_ACK, so there is no ACK time — the frame was handed to the secure session. */
+    transportAck: "none";
+    ackedAt: null;
+    ackLatencyMs: null;
+  }
+) & {
+  /** Tunnel sequence number used (UDP: the one the gateway acknowledged; stream: always 0). */
   sequence: number;
-  ackedAt: number;
-  /** Time from first transmission to ACK (ms) — gateway responsiveness. */
-  ackLatencyMs: number;
   attempts: number;
   /** Never rejects. `confirmed` = L_Data.con without error; `bus_error` = L_Data.con with the
    * error flag; `not_confirmed` = no matching L_Data.con arrived in time (or session ended). */
   confirmation: Promise<ConfirmationOutcome>;
-}
+};
 
 export interface TunnelDiagnostics {
   state: TunnelState;
+  link: "datagram" | "secure-stream";
+  /** TUNNELLING_ACK frames received and ignored in stream mode (TUN §2.6.2). */
+  ignoredAcks: number;
   channelId: number | null;
   assignedAddress: number | null;
   gateway: string;
@@ -166,6 +180,7 @@ export class KnxTunnelClient {
 
   private readonly link: TunnelLink;
   private linkOpen = false;
+  private readonly stream: boolean;
   private channelId: number | null = null;
   private assigned: number | null = null;
   private txSeq = 0;
@@ -197,6 +212,14 @@ export class KnxTunnelClient {
     this.port = opts.port ?? 3671;
     if (!opts.link && !opts.socketFactory) throw new KnxTunnelError("invalid_argument", "either a socketFactory or a link is required");
     this.link = opts.link ?? new UdpTunnelLink(opts.host, this.port, opts.socketFactory!);
+    this.stream = this.link.kind === "secure-stream";
+    if (this.stream) {
+      // Fail closed: unverified stream rules may run only over an in-memory transport (tunnel-rules.ts).
+      const blockers = unverifiedBlockers(STREAM_RULES);
+      if (blockers.length > 0 && this.link.simulated !== true) {
+        throw new KnxTunnelError("invalid_argument", `stream tunnelling is refused on a real transport: unverified rules ${blockers.join(", ")} (docs/architecture/knx-secure-blocker-matrix.md)`);
+      }
+    }
     this.cfg = {
       connectTimeoutMs: opts.connectTimeoutMs ?? 10_000,
       ackTimeoutMs: opts.ackTimeoutMs ?? 1_000,
@@ -212,7 +235,7 @@ export class KnxTunnelClient {
     };
     this.closedPromise = new Promise<void>((r) => { this.resolveClosed = r; });
     this.stats = {
-      state: "idle", channelId: null, assignedAddress: null, gateway: `${opts.host}:${this.port}`, connectLatencyMs: null,
+      state: "idle", link: this.link.kind, ignoredAcks: 0, channelId: null, assignedAddress: null, gateway: `${opts.host}:${this.port}`, connectLatencyMs: null,
       heartbeat: { sent: 0, failures: 0, lastRttMs: null, lastOkAt: null },
       framesSent: 0, framesReceived: 0, telegramsDelivered: 0, acksReceived: 0, sendRetries: 0, staleAcks: 0,
       duplicateInbound: 0, outOfOrderInbound: 0, foreignDatagrams: 0, wrongChannel: 0, unexpectedServices: 0, undecodedGroupTelegrams: 0, listenerErrors: 0,
@@ -249,10 +272,11 @@ export class KnxTunnelClient {
         onFrame: (data) => this.onFrame(data),
         onForeign: () => { if (this._state !== "closed" && this._state !== "idle") this.stats.foreignDatagrams++; },
         onError: (err) => this.onSocketError(err),
+        onClosed: (reason) => { if (this.linkOpen) this.shutdown("session_closed", new KnxTunnelError("session_closed", reason)); },
       });
       this.linkOpen = true;
     } catch (err) {
-      const e = new KnxTunnelError("socket_error", `cannot open UDP socket: ${err instanceof Error ? err.message : String(err)}`);
+      const e = new KnxTunnelError("socket_error", `cannot open ${this.stream ? "secure stream" : "UDP socket"}: ${err instanceof Error ? err.message : String(err)}`);
       this.shutdown("socket_error", e);
       throw e;
     }
@@ -303,6 +327,7 @@ export class KnxTunnelClient {
       messageCode: CemiMessageCode.L_DATA_REQ, source: this.assigned ?? 0, destination: next.input.destination,
       service: next.input.service, data: next.input.data ?? null, priority: next.input.priority,
     });
+    if (this.stream) { this.sendStream(next, cemi); return; }
     const sequence = this.txSeq;
     const flight: InFlight = {
       send: next, sequence, attempts: 0, firstSentAt: this.clock.now(), timer: null,
@@ -310,6 +335,21 @@ export class KnxTunnelClient {
     };
     this.inFlight = flight;
     this.transmitFlight(flight);
+  }
+
+  /** Stream mode (TUN §2.6.2): no ACK exists, so there is nothing to wait for, repeat or time out; the send is complete once the session accepted the frame. */
+  private sendStream(next: PendingSend, cemi: Buffer): void {
+    const sequence = STREAM_RULES.sendSequence.value;
+    try {
+      this.transmit(encodeTunnellingRequest({ channelId: this.channelId!, sequence, cemi }));
+    } catch (e) {
+      const err = new KnxTunnelError("session_closed", `secure session refused the frame: ${e instanceof Error ? e.message : String(e)}`);
+      next.reject(err);
+      this.shutdown("session_closed", err);
+      return;
+    }
+    next.resolve({ transportAck: "none", sequence, ackedAt: null, ackLatencyMs: null, attempts: 1, confirmation: this.expectConfirmation(next.input) });
+    this.pump();
   }
 
   private transmitFlight(f: InFlight): void {
@@ -380,6 +420,7 @@ export class KnxTunnelClient {
   }
 
   private onAck(body: Buffer): void {
+    if (this.stream) { this.stats.ignoredAcks++; return; }                 // TUN §2.6.2: "Received TUNNELLING_ACK Frames shall be ignored."
     const a = decodeTunnellingAck(body);
     if (a.channelId !== this.channelId) { this.stats.wrongChannel++; return; }
     const f = this.inFlight;
@@ -398,7 +439,7 @@ export class KnxTunnelClient {
     this.txSeq = (this.txSeq + 1) & 0xff;
     const now = this.clock.now();
     f.send.resolve({
-      sequence: f.sequence, ackedAt: now, ackLatencyMs: now - f.firstSentAt, attempts: f.attempts,
+      transportAck: "ack", sequence: f.sequence, ackedAt: now, ackLatencyMs: now - f.firstSentAt, attempts: f.attempts,
       confirmation: this.expectConfirmation(f.send.input),
     });
     this.pump();
@@ -427,6 +468,7 @@ export class KnxTunnelClient {
   private onTunnellingRequest(body: Buffer): void {
     const req = decodeTunnellingRequest(body);
     if (req.channelId !== this.channelId) { this.stats.wrongChannel++; return; }
+    if (this.stream) return this.deliverInbound(req.cemi);                  // TUN §2.6.2: sequence not evaluated, no TUNNELLING_ACK sent
     const ack = (): void => this.transmit(encodeTunnellingAck({ channelId: req.channelId, sequence: req.sequence, status: StatusCode.NO_ERROR }));
     if (req.sequence === this.rxSeq) {
       this.rxSeq = (this.rxSeq + 1) & 0xff;
@@ -439,9 +481,13 @@ export class KnxTunnelClient {
       this.stats.outOfOrderInbound++;
       return;
     }
+    this.deliverInbound(req.cemi);
+  }
+
+  private deliverInbound(raw: Buffer): void {
     let cemi: CemiFrame;
-    try { cemi = decodeCemi(req.cemi); } catch (e) {
-      if (e instanceof KnxCemiError) { bump(this.stats.malformedCemi, e.code); this.emitDecodeError("cemi", e.code, req.cemi); return; }
+    try { cemi = decodeCemi(raw); } catch (e) {
+      if (e instanceof KnxCemiError) { bump(this.stats.malformedCemi, e.code); this.emitDecodeError("cemi", e.code, raw); return; }
       throw e;
     }
     if (cemi.messageCode === CemiMessageCode.L_DATA_CON) { this.onConfirmation(cemi); return; }
@@ -461,6 +507,7 @@ export class KnxTunnelClient {
   // heartbeat
 
   private scheduleHeartbeat(): void {
+    if (this.stream) return;                                                // B4 unverified: no KNX-level heartbeat in stream mode (session KEEPALIVE only)
     this.hbTry = 0;
     this.hbTimer = this.clock.setTimeout(() => this.sendHeartbeat(), this.cfg.heartbeatIntervalMs);
   }
@@ -503,7 +550,7 @@ export class KnxTunnelClient {
   private onGatewayDisconnect(body: Buffer): void {
     const r = decodeDisconnectRequest(body);
     if (r.channelId !== this.channelId) { this.stats.wrongChannel++; return; }
-    this.transmit(encodeDisconnectResponse({ channelId: r.channelId, status: StatusCode.NO_ERROR }));
+    if (!this.stream) this.transmit(encodeDisconnectResponse({ channelId: r.channelId, status: StatusCode.NO_ERROR }));   // B5: stream response unverified
     this.shutdown("gateway_disconnect", new KnxTunnelError("gateway_disconnect", "gateway terminated the tunnel"));
   }
 
@@ -519,6 +566,7 @@ export class KnxTunnelClient {
     if (this._state === "idle") { this.shutdown("local_disconnect"); return; }
     if (this._state === "disconnecting") { await this.closedPromise; return; }
     if (this._state === "connecting") { this.shutdown("local_disconnect"); return; }
+    if (this.stream) { this.shutdown("local_disconnect"); return; }         // B5 unverified: closing the secure session closes the connection implicitly (IPS §2.4.2)
     this._state = "disconnecting";
     this.clearHeartbeat();
     this.failPending(new KnxTunnelError("closed", "tunnel is disconnecting"));

@@ -3,9 +3,9 @@
  * (CONNECT/ACK/heartbeat/sequence/teardown) is written against {@link TunnelLink}; {@link UdpTunnelLink} carries today's UDP behaviour
  * VERBATIM (socket ownership, source filtering, route-back addressing), moved out of tunnel-client.ts without change.
  *
- * `kind: "datagram"` is deliberate: the client still speaks datagram semantics (UDP route-back HPAIs, per-frame ACK, retransmission).
- * A stream link needs different rules whose wire details are unverified (docs/architecture/knx-secure-blocker-matrix.md B1–B5), so the
- * type admits no other kind yet and nothing here is connected to SecureSessionConnection.
+ * `datagram` keeps today's UDP semantics. `secure-stream` (secure/secure-stream-link.ts) selects the TCP rules of tunnel-rules.ts: three are
+ * verified (TUN §2.6.2), the rest are blocked (docs/architecture/knx-secure-blocker-matrix.md B1–B5, B8), so a stream link only works over an
+ * in-memory transport.
  */
 import type { RemoteInfo, SocketFactory, KnxDatagramSocket } from "./transport.js";
 
@@ -15,10 +15,15 @@ export interface TunnelLinkHandlers {
   /** A datagram from any other source address was dropped (counted by the client). */
   onForeign(): void;
   onError(error: Error): void;
+  /** The link ended by itself (e.g. the secure session closed). Never called by the UDP link. */
+  onClosed?(reason: string): void;
 }
 
 export interface TunnelLink {
-  readonly kind: "datagram";
+  /** `datagram` = UDP rules (per-frame ACK, retransmission, UDP route-back HPAI). `secure-stream` = TCP rules of tunnel-rules.ts. */
+  readonly kind: "datagram" | "secure-stream";
+  /** Stream links only: true when the transport is in-memory (see markSimulated); unverified stream rules are allowed only then. */
+  readonly simulated?: boolean;
   /** Opens the transport; rejects if it cannot be opened. */
   open(handlers: TunnelLinkHandlers): Promise<void>;
   /** Sends to the current peer: the gateway's configured endpoint until {@link routeBack} has run. No-op when not open. */

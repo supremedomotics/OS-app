@@ -72,3 +72,11 @@ export interface StreamHandlers {
 
 /** Opens one connection to the (fixed) gateway endpoint. Rejects if the connection cannot be established. */
 export type StreamFactory = (handlers: StreamHandlers) => Promise<KnxStreamSocket> | KnxStreamSocket;
+
+/**
+ * Marks a stream factory as in-memory only. Unverified protocol rules (see tunnel-rules.ts) may be exercised ONLY over a marked factory; a real
+ * factory (tcp-socket.ts) is never marked, so it is refused wherever a rule is unverified.
+ */
+const SIMULATED = Symbol.for("supremeos.knx.simulatedTransport");
+export function markSimulated<F extends StreamFactory>(f: F): F { Object.defineProperty(f, SIMULATED, { value: true }); return f; }
+export function isSimulated(f: StreamFactory): boolean { return (f as unknown as Record<symbol, unknown>)[SIMULATED] === true; }

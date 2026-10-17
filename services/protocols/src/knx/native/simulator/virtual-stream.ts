@@ -2,7 +2,7 @@
  * SIMULATION INFRASTRUCTURE — in-memory, in-order, reliable byte streams (TCP semantics) with an on-path "tap" so tests can play a
  * network attacker (fragment, merge, drop, tamper, duplicate, replay). Cannot reach a real network by construction.
  */
-import type { Clock, KnxStreamSocket, RemoteInfo, StreamFactory, StreamHandlers } from "../transport.js";
+import { markSimulated, type Clock, type KnxStreamSocket, type RemoteInfo, type StreamFactory, type StreamHandlers } from "../transport.js";
 
 export type Direction = "client->server" | "server->client";
 /** Receives each chunk written in `direction`; returns the chunks to actually deliver (possibly none, several, or altered). */
@@ -57,7 +57,7 @@ export class VirtualStreamNetwork {
 
   /** `fragment` optionally re-chunks every client write (models TCP segmentation); the tap model covers the rest. */
   createStreamFactory(clientAddress: string, targetAddress: string, targetPort: number): StreamFactory {
-    return (handlers: StreamHandlers): KnxStreamSocket => {
+    return markSimulated((handlers: StreamHandlers): KnxStreamSocket => {
       const accept = this.listeners.get(`${targetAddress}:${targetPort}`);
       if (!accept) { this.stats.refused++; throw new Error(`ECONNREFUSED ${targetAddress}:${targetPort}`); }
       const conn = new VirtualConnection(this, this.nextId++);
@@ -104,6 +104,6 @@ export class VirtualStreamNetwork {
         end: () => { if (!clientDestroyed) closeBoth("client"); },
         destroy: () => { if (clientDestroyed) return; clientDestroyed = true; closeBoth("client", new Error("connection reset by client")); },
       };
-    };
+    });
   }
 }
