@@ -1,0 +1,203 @@
+tssk_clause,test_id,title,cited_source_clauses
+2.1.1,-,Meta test: Secure multicast frames ok,"AN159 v05: 2.2.1.3,2.2.2.4"
+2.1.2,70102,Multicast communication on System Setup Multicast Address works,AN159 v05: 2.2.2.1
+2.1.3,70103,Multicast communication on non-System Setup Multicast Address works,AN159 v05: 2.2.2.1
+2.1.4,70104,Frames sent to wrong multicast address but with a known backbone key are ignored,AN159 v05: 2.2.2.1
+2.1.5,70105,Erroneous SecureWrapper frames are ignored,AN159 v05: 2.2.1.3.1
+2.1.6,70106,Timer Synchronization: SecureWrapper updates mc_timer,"AN159 v05: 2.2.2.3.2.6,2.2.2.3.2.7"
+2.1.7,70107,Timer Synchronization: TimerNotify updates mc_timer,"AN159 v05: 2.2.2.3.2.6,2.2.2.3.2.7"
+2.1.8,70108,Timer Synchronization: Timer increases when power-cycled,AN159 v05: 2.2.4.2
+2.1.9,70109,Timer Synchronization: Clock accuracy and TimerNotify challenge,AN159 v05: 2.2.2.2.3
+2.1.10,70110,Timer Synchronization: Check initial TimerNotify timing,"AN159 v05: 2.2.2.3.1.1,2.2.2.3.2.2"
+2.1.11,70111,Timer Synchronization: Check periodic TimerNotify timing (time-keeper),AN159 v05: 2.2.2.3.2.2
+2.1.12,70112,Timer Synchronization: Initial TimerNotify can be suppressed,"AN159 v05: 2.2.2.3.1.1,2.2.2.3.2.2,2.2.2.3.2.7"
+2.1.13,70113,Timer Synchronization: Periodic TimerNotify is suppressed by E01 events,"AN159 v05: 2.2.2.3.2.2,2.2.2.3.2.7"
+2.1.14,70114,Timer Synchronization: Periodic TimerNotify is suppressed by E02 events,"AN159 v05: 2.2.2.3.2.2,2.2.2.3.2.7"
+2.1.15,70115,Timer Synchronization: Periodic TimerNotify is not suppressed by E03 events,"AN159 v05: 2.2.2.3.2.2,2.2.2.3.2.7"
+2.1.16,70116,Timer Synchronization: Periodic TimerNotify is suppressed by E05 events,"AN159 v05: 2.2.2.3.2.2,2.2.2.3.2.7"
+2.1.17,70117,Timer Synchronization: Periodic TimerNotify is suppressed by E06 events,"AN159 v05: 2.2.2.3.2.2,2.2.2.3.2.7"
+2.1.18,70118,Timer Synchronization: Periodic TimerNotify is not suppressed by E07 events,"AN159 v05: 2.2.2.3.2.2,2.2.2.3.2.7"
+2.1.19,70119,Timer Notify Frame Format – Send,AN159 v05: 2.2.2.4.2
+2.1.20,70120,Timer Notify Frame Format – Receive,AN159 v05: 2.2.2.4.2
+2.1.21,70121,Outdated SecureWrappers are dropped,AN159 v05: 2.2.2.3.2.7
+2.1.22,70122,Timer Synchronization: Sending SecureWrapper suppresses periodic TimerNotify,AN159 v05: 2.2.2.3.2.7
+2.1.23,70123,Timer Synchronization: Changing the backbone key resets mc_timer,AN159 v05: 2.2.2.3.2.7
+2.1.24,70124,Timer Synchronization: Setting the backbone key to the same value does not reset mc_timer,AN159 v05: 2.2.2.3.2.7
+2.1.25,70125,Timer Synchronization: Sending SecureWrapper does not cancel SCHED_UPDATE state,AN159 v05: 2.2.2.3.2.7
+2.1.26,70126,Timer Synchronization: Update is suppressed by E01 events,AN159 v05: 2.2.2.3.2.7
+2.1.27,70127,Timer Synchronization: Update is suppressed by E02 events,AN159 v05: 2.2.2.3.2.7
+2.1.28,70128,Timer Synchronization: Update is not affected by E03 events,AN159 v05: 2.2.2.3.2.7
+2.1.29,70129,Timer Synchronization: Update is not affected by E04 events,AN159 v05: 2.2.2.3.2.7
+2.1.30,70130,Timer Synchronization: Update is not affected by E05 events,AN159 v05: 2.2.2.3.2.7
+2.1.31,70131,Timer Synchronization: Update is not affected by E06 events,AN159 v05: 2.2.2.3.2.7
+2.1.32,70132,Timer Synchronization: Update is not affected by E07 events,AN159 v05: 2.2.2.3.2.7
+2.1.33,70133,Timer Synchronization: Update is not affected by E08 events,AN159 v05: 2.2.2.3.2.7
+2.1.34,70134,Timer Synchronization: Become time follower on E01 events (and periodic TimerNotify timing for time-follower),AN159 v05: 2.2.2.3.2.7
+2.1.35,70135,Timer Synchronization: Become time follower on E02 events (and periodic TimerNotify timing for time-follower),AN159 v05: 2.2.2.3.2.7
+2.1.36,70136,Timer Synchronization: Become time keeper on E10 events,AN159 v05: 2.2.2.3.2.7
+2.1.37,70137,Timer Synchronization: Time keeper update duration,AN159 v05: 2.2.2.3.2.7
+2.1.38,70138,Timer Synchronization: Time follower update duration,AN159 v05: 2.2.2.3.2.7
+2.1.39,70139,Timer Synchronization: TimerNotify response,AN159 v05: 2.2.2.4.2
+2.1.40,70140,Nested SecureWrapper is ignored (multicast),KSG616-18.04: 2.2.1.2.2.2
+2.1.41,70141,Timer Synchronization is disabled when routing is set to non-secure,KSG616-18.04: 2.2.2.3.2.8
+2.1.42,70142,Timer Synchronization is enabled when routing is set to secure,KSG616-18.04: 2.2.2.3.2.8
+2.2.1,-,Meta test: Secure unicast frames ok,"AN159 v05: 2.2.1.3.1,2.2.3.5.1"
+2.2.2,70202,Secure session setup,"AN159 v05: 2.2.3.6,2.2.3.7,2.2.3.8,2.2.3.9"
+2.2.3,70203,Secure sessions are contained in a single TCP connection,KSG696-08.01: 2.2.3.2.7
+2.2.4,70204,"Secure session setup, user level","AN159 v05: 2.2.3.6,2.2.3.7,2.2.3.8,2.2.3.9"
+2.2.5,70205,SecureWrapper traffic keeps session alive,"AN159 v05: 2.2.3.5.2.1.1,2.4.1"
+2.2.6,70206,Erroneous SecureWrapper,AN159 v05: 2.2.1.3.1
+2.2.7,70207,SessionClose by client,AN159 v05: 2.2.3.9.2
+2.2.8,70208,Unsecured SessionClose by client is ignored,AN159 v05: 2.2.3.9.2
+2.2.9,70209,Closing TCP connection closes all contained secure sessions,KSG616-15.02: 2.4.2
+2.2.10,70210,Stress test: Maximum parallel sessions,"AN159 v05: 2.2.3.5.1,2.2.3.5.2.1"
+2.2.11,70211,Ignore invalid SessionRequests,AN159 v05: 2.2.3.8.2; AN184 v01: 2.2.2.2.5
+2.2.12,70212,Ignore secured SessionRequest,AN159 v05: 2.2.3.5.1
+2.2.13,70213,Missing authentication,AN159 v05: 2.2.3.5.2.5
+2.2.14,70214,Ignore invalid SessionAuthenticate (format errors),"AN159 v05: 2.2.3.8.2,2.2.3.8.5"
+2.2.15,70215,Reject invalid SessionAuthenticate,AN159 v05: 2.2.3.5.2.5
+2.2.16,70216,Authentication timeout,AN159 v05: 2.2.3.5.2.5
+2.2.17,70217,Unsecured SessionAuthenticate is ignored,AN159 v05: 2.2.3.8.2
+2.2.18,70218,Keepalive keeps session alive,AN159 v05: 2.2.3.5.2.5
+2.2.19,70219,Session timeout,AN159 v05: 2.2.3.5.2.5
+2.2.20,70220,Keepalive before authentication,AN159 v05: 2.2.3.5.2.5
+2.2.21,70221,Close before authentication,AN159 v05: 2.2.3.5.2.5
+2.2.22,70222,Erroneous valid second SessionAuthenticate,AN159 v05: 2.2.3.5.2.5
+2.2.23,70223,Erroneous invalid second SessionAuthenticate,AN159 v05: 2.2.3.5.2.5
+2.2.24,70224,Sequence Number tests,AN159 v05: 2.2.3.3
+2.2.25,70225,SessionRequest via UDP is ignored,KSG616-15.02: 2.2.3.3
+2.2.26,70226,Sequential secure sessions in the same TCP connection,AN184 v01: 2.2.2.2.3
+2.2.27,70227,Nested SecureWrapper is ignored (unicast),KSG616-18.04: 2.2.1.2.2.2
+2.2.28,70228,SessionRequest via TCP with non-route-back HPAI is ignored,KSG616-18.04: 2.2.3.6.4
+2.2.29,70229,Reject valid SessionAuthenticate after invalid Session-Authenticate,KSG616-18.04: 2.2.3.8.3
+2.2.30,70230,Drop non-secure device management frames for secure device management connections,AN159 v05: 2.3.1.4.3
+2.2.31,70231,Drop non-secure tunnelling frames for secure tunnelling connections,AN159 v05: 2.3.1.4.3
+2.2.32,70232,Drop routing frames arriving via unicast,AN159 v05: 2.3.1.4.3
+2.2.33,70233,KNX connections are strictly associated with a single secure session,KSG696-08.01: 2.2.3.2.8
+2.2.34,70234,KNX connection is implicitly closed when enclosing secure session is closed,KSG616-16.02: 2.4.2
+2.2.35,70235,Different public key after power-cycle,KSG616-18.04: 2.2.4.1
+2.2.36,70236,DisconnectRequest and ConnectionStateRequest return E_CONNECTION_ID outside of associated secure session,KSG616-18.04: 2.4.1
+2.2.37,70237,Invalid SecureWrapper does not extend session timeout,KSG616-18.04: 2.4.1
+2.2.38,70238,Session timeouts of concurrent secure sessions are independent,KSG616-18.04: 2.4.1
+2.2.39,70239,M_Prop services honour Security Mode,KSG616-19.01: 2.2.1.4.3
+2.3.1,70301,Checking of Resources – PID_BACKBONE_KEY,AN159 v05: 2.3.1.1
+2.3.2,70302,Checking of Resources – PID_DEVICE_AUTHENTICATION_CODE,AN159 v05: 2.3.1.2
+2.3.3,70303,Checking of Resources – PID_PASSWORD_HASHES,AN159 v05: 2.3.1.3
+2.3.4,70304,Checking of Resources – PID_SECURED_SERVICE_FAMILIES,KSG616-18.04: 2.3.1.4
+2.3.5,70305,Checking of Resources – PID_MULTICAST_LATENCY_TOLERANCE,AN159 v05: 2.3.1.5
+2.3.6,70306,Checking of Resources – PID_SYNC_LATENCY_FRACTION,AN159 v05: 2.3.1.6
+2.3.7,70307,Checking of Resources – PID_TUNNELLING_USERS,KSG616-20.03: 2.3.1.7.1
+2.3.8,70308,"Combinations of KNX connections, secure sessions and secured service families (PID_SECURED_SERVICE_FAMILIES)",KSG616-18.04: 2.2.1.4.2
+2.3.9,70309,Writes to PID_SECURED_SERVICE_FAMILIES for unsupported service families report E_DATA_VOID,
+2.3.10,70310,Remote configuration services are ignored when security mode is enabled,KSG616-19.01: 2.2.1.4.7
+2.3.11,70311,Non-secure KNX connections are not closed by enabling security in PID_SECURED_SERVICE_FAMILIES,
+2.4.1,-,Meta test: Check all IP System Broadcast related frames sent by the BDUT for consistency,KSG668-15.01: 2.2.1
+2.4.2,80102,Receive IP System Broadcast on system setup multicast address only,"KSG668-15.01: 2.2.3.5,2.2.4.1"
+2.4.3,80103,Valid system broadcast frames are routed from TP1 to IP as RoutingSystemBroadcast if system broadcast mode is enabled,"KSG668-15.01: 2.2.1,2.2.3.2"
+2.4.4,80104,Valid system broadcast frames are routed from TP1 to IP as RoutingIndication if system broadcast mode is disabled,"KSG668-15.01: 2.2.1,2.2.3.2"
+2.4.5,80105,Unsuitable frames are not routed from TP1 to IP as RoutingSystem-Broadcast,"KSG668-15.01: 2.2.1,2.2.3.2,2.2.3.4"
+2.4.6,80106,Valid system broadcast frames are routed from IP to TP1 if system broadcast mode is enabled,"KSG668-15.01: 2.2.1,2.2.3.3"
+2.4.7,80107,Valid system broadcast frames are not routed from IP to TP1 if system broadcast mode is disabled,KSG668-15.01: 2.2.3.3
+2.4.8,80108,Unsuitable frames are not routed from IP to TP1,KSG668-15.01: 2.2.3.3
+2.4.9,80109,Handling in Management: Unsuitable system broadcast frames are ignored (secure),KSG668-15.01: 2.2.4.2
+2.4.10,80110,Handling in Management: Unsuitable system broadcast frames are ignored (non-secure),KSG668-15.01: 2.2.4.2
+2.4.11,80111,System broadcast mode automatically switches back to Disabled,KSG668-15.01: 2.3.1.1
+2.4.12,80112,System broadcast mode can be manually disabled,KSG668-15.01: 2.3.1.1
+2.4.13,80113,Handling in Management: Read serial number,KSG668-15.01: 2.2.4.2
+2.4.14,80114,Handling in Management: SyncRequest is responded to,KSG668-15.01: 2.2.4.2
+2.4.15,80115,Handling in Management: Non-secure domain address write (4 octet version),KSG668-15.01: 2.2.4.2
+2.4.16,80116,Handling in Management: Non-secure domain address write (4 octet version) is ignored when security mode is enabled,KSG668-15.01: 2.2.4.2
+2.4.17,80117,Handling in Management: Secure domain address write (4 octet version),KSG668-15.01: 2.2.4.2
+2.4.18,80118,Handling in Management: Secure domain address write (21 octet version),KSG668-15.01: 2.2.4.2
+2.4.19,80119,Handling in Management: Secure domain address write with invalid routing security version is ignored,KSG668-15.01: 2.2.4.2
+2.4.20,80120,Group communication is not routed via system broadcast,KSG668-15.01: 2.2.4.2
+2.4.21,80121,S-AL system broadcast frames with SBC=1 and T=0 are routed from TP1 to IP as domain broadcast,KSG668-15.01: 2.2.3.2
+2.4.22,80122,S-AL system broadcast frames with SBC=1 and T=0 are not routed from IP to TP1,KSG668-15.01: 2.2.3.3
+2.4.23,80123,Handling in Management: Domain Broadcast: Read serial number,KSG668-15.01: 2.2.4.2.1; KSG668-15.01: 2.2.4.2.2
+2.4.24,80124,Handling in Management: Domain Broadcast: SyncRequest is responded to,KSG668-15.01: 2.2.4.2.1; KSG668-15.01: 2.2.4.2.3
+2.4.25,80125,Handling in Management: Domain Broadcast: Non-secure domain address write (4 octet version),KSG668-15.01: 2.2.4.2.1; KSG668-15.01: 2.2.4.2.4
+2.4.26,80126,Handling in Management: Domain Broadcast: Non-secure domain address write (4 octet version) is ignored when security mode is enabled,KSG668-15.01: 2.2.4.2.1; KSG668-15.01: 2.2.4.2.4
+2.4.27,80127,Handling in Management: Domain Broadcast: Secure domain address write (4 octet version),KSG668-15.01: 2.2.4.2.1; KSG668-15.01: 2.2.4.2.5.1
+2.4.28,80128,Handling in Management: Domain Broadcast: Secure domain address write (21 octet version),KSG668-15.01: 2.2.4.2.1; KSG668-15.01: 2.2.4.2.5.2
+2.4.29,80129,Handling in Management: Domain Broadcast: Secure domain address write with invalid routing security version is ignored,KSG668-15.01: 2.2.4.2.1; KSG668-15.01: 2.2.4.2.5.2
+2.4.30,80130,Routing service family version is at least 2,KSG668-15.01: 2.8
+2.4.31,80131,Enabling system broadcast mode while domain broadcasts are blocked,
+2.4.32,80132,Handling in Management: Domain Broadcast: Ignore cEMI telegrams with SB=0 (system broadcast),KSG668-15.01: 2.2.4.2.1; KSG668-15.01: 2.2.4.2.2
+2.5.1,10701,TCP communication works,KSG696-08.01: 2.2.3.2.3
+2.5.2,10702,Fragmented TCP frames are received OK,KSG696-08.01: 2.2.3.2.3.1
+2.5.3,10703,Merged TCP frames are received OK,KSG696-08.01: 2.2.3.2.3.1
+2.5.4,10704,TCP connection gets closed on wrong header length,KSG696-08.01: 2.2.3.2.3.1
+2.5.5,10705,TCP connection gets closed on wrong protocol version,KSG696-08.01: 2.2.3.2.3.1
+2.5.6,10706,TCP connection gets closed on total length field < 6,KSG696-08.01: 2.2.3.2.3.1
+2.5.7,10707,TCP connection gets closed upon receiving insufficient data (receive timeout),KSG696-08.01: 2.2.3.2.3.1
+2.5.8,10708,TCP connection does not get closed on long frame,KSG696-08.01: 2.2.3.2.3.1
+2.5.9,10709,TCP connection does not get closed on unknown service type,KSG696-08.01: 2.2.3.2.3.1
+2.5.10,10710,Half-closing TCP connection results in closing the TCP connection,KSG696-08.01: 2.2.3.2.3.1
+2.5.11,10711,KNXnet/IP frames with total length 508 are handled correctly,AN184 v02: 2.2.1
+2.5.12,10712,TCP connection is not closed after DescriptionResponse,KSG696-08.01: 2.2.3.2.2
+2.5.13,10713,TCP connection gets closed immediately after inner KNX connection timeout,KSG696-08.01: 2.2.3.2.3
+2.5.14,10714,TCP connection gets closed immediately after inner secure session timeout,KSG696-08.01: 2.2.3.2.3
+2.5.15,10715,TCP connection does not get closed while at least one KNX connection or secure session is active,KSG696-08.01: 2.2.3.2.3.1
+2.5.16,10716,TCP/session/connection timeout behavior on concurrent connections/sessions,KSG696-08.01: 2.2.3.2.3.1
+2.5.17,10717,TCP idle timeout,KSG696-08.01: 2.2.3.2.3.1
+2.5.18,10718,TCP octets prevent idle timeout,KSG696-08.01: 2.2.3.2.3.1
+2.5.19,10719,KNX connections in TCP ignore sequence counter,KSG696-08.01: 2.2.3.2.4.1
+2.5.20,10720,KNX connections in TCP do not send ACKs and ignore ACKs,KSG696-08.01: 2.2.3.4
+2.5.21,10721,TCP and KNX connections: HPAI restrictions,KSG696-08.01: 2.2.3.2.5
+2.5.22,10722,UDP and KNX connections: HPAI restrictions,KSG696-08.01: 2.2.3.2.5
+2.5.23,10723,Concurrent KNX connections in a TCP connection,KSG696-08.01: 2.2.3.2.7
+2.5.24,10724,Concurrent KNX connections in a secure session,KSG696-08.01: 2.2.3.2.8
+2.5.25,10725,Sequential KNX connections in a TCP connection,KSG696-08.01: 2.2.3.2.7
+2.5.26,10726,Sequential KNX connections in a secure session,KSG696-08.01: 2.2.3.2.8
+2.5.27,10727,KNX connections do not span concurrent TCP connections,KSG696-08.01: 2.2.3.2.7
+2.5.28,10728,KNX connections get closed on TCP connection close (and do not span sequential TCP connections),KSG696-08.01: 2.2.3.2.7
+2.5.29,10729,Valid DeviceConfigurationRequest frames with invalid cEMI content extend KNX connection timeout,
+2.5.30,10730,Open TCP connections get closed by restart,"KSG696-09.02: 2.2.3.2.3,2.4.3"
+2.5.31,10731,KNX connections via UDP get closed by restart,KSG696-09.02: 2.4.3
+2.6.1,10901,Meta test: SearchResponseExtended frames OK,AN184 v02: 2.2.2.2.2
+2.6.2,10902,SearchRequestExtended via UDP,AN184 v02: 2.2.2.1.1
+2.6.3,10903,SearchRequestExtended via TCP,AN184 v02: 2.2.2.1.1
+2.6.4,10904,SearchRequestExtended via TCP and secure session,AN184 v02: 2.2.2.1.1
+2.6.5,10905,Mandatory Bit,AN184 v02: 2.2.2.1.3.1
+2.6.6,10906,SRP Type Programming Mode,AN184 v02: 2.2.2.1.3.3
+2.6.7,10907,SRP Type Mac Address,AN184 v02: 2.2.2.1.3.4
+2.6.8,10908,SRP Type Select By Service,AN184 v02: 2.2.2.1.3.5
+2.6.9,10909,SRP Type Request DIBs,AN184 v02: 2.2.2.1.3.6
+2.6.10,10910,Erroneous SearchRequestExtended frames are ignored,AN184 v02: 2.2.2.1.2
+2.6.11,10911,SearchRequest via TCP is ignored,AN184 v02: 2.2.3.2.1
+2.6.12,10912,SearchRequest via UDP with TCP/UDP HPAI is ignored/accepted,AN184 v02: 2.2.3.2.1
+2.6.13,10913,SearchResponse reports only UDP endpoint even if TCP is supported,AN184 v02: 2.2.3.2.1
+2.6.14,10914,DescriptionRequest via UDP with TCP/UDP HPAI is ignored/accepted,AN184 v02: 2.2.3.2.1
+2.6.15,10915,Secure service family is reported by SearchRequestExtended,KSG616-20.03: 2.6.2.1
+2.6.16,10916,Secured service families DIB is reported by SearchRequest-Extended if at least one service is secured,KSG616-20.03: 2.6.2.2
+2.6.17,10917,Secured service families DIB is not reported by SearchRequest-Extended if no service is secured,KSG616-20.03: 2.6.2.2
+2.6.18,10918,Extended Device Information DIB,KSG643-20.01: 2.4.2
+2.6.19,10919,"Supported service family versions are consistent between Search-Response, DescriptionResponse and SearchResponseExtended","KSG696-09.02: 2.2.2.3,2.2.2.4,2.2.2.5"
+2.6.20,10920,SearchResponse and DescriptionResponse only report pre-security service families in Supported Service Families DIB and only report pre-security DIBs,"AN184 v02: 2.2.3.2.2; KSG643-21.02: 2.4.1.2,2.4.2.2; KSG616-20.03: 2.6.2.2"
+2.7.1,30401,TunnellingFeatureGet,"KSG643-20.01: 2.2.2.2.2,2.2.2.8.1"
+2.7.2,30402,Failing TunnellingFeatureSet,"KSG643-20.01: 2.2.2.2.3,2.2.2.8.1"
+2.7.3,30403,TunnellingFeatureSet of Interface Individual Address (security mode disabled),KSG643-20.01: 2.2.2.8.7
+2.7.4,30404,TunnellingFeatureSet of Interface Individual Address (security mode enabled),KSG643-20.01: 2.2.2.8.7
+2.7.5,30405,Tunnelling feature: Bus connection status,KSG643-21.02: 2.2.2.8.4
+2.7.6,30406,No Tunnelling Acks with TCP,KSG643-20.01: 2.2.2.2.1
+2.7.8,30408,TunnellingFeatureGet -Connection Header handling,"KSG643-20.01: 2.2.2.4,2.6"
+2.7.9,30409,TunnellingFeatureSet -Connection Header handling,"KSG643-20.01: 2.2.2.6,2.6"
+2.7.10,30410,Tunnelling ConnectRequest -E_CONNECTION_OPTION,KSG643-20.01: 2.2.1.5.1
+2.7.11,30411,Tunnelling ConnectRequest -E_NO_MORE_CONNECTIONS,KSG616-20.03: 2.3.1.7.1; KSG643-20.01: 2.2.1.5.1
+2.7.12,30412,Tunnelling ConnectRequest -E_NO_MORE_UNIQUE_CONNECTIONS,"KSG643-20.01: 2.2.1.5.1,3.3"
+2.7.13,30413,Tunnelling ConnectRequest -E_NO_TUNNELLING_ADDRESSES,KSG643-20.01: 2.2.1.5.1
+2.7.14,30414,Tunnelling ConnectRequest -E_AUTHORISATION_ERROR,KSG616-20.03: 2.3.1.7.1; KSG643-20.01: 2.2.1.5.1
+2.7.15,30415,Tunnelling ConnectRequest -E_CONNECTION_IN_USE,KSG643-20.01: 2.2.1.5.1
+2.7.16,30416,Default for Interface Feature Info Service Enable is Disabled,KSG643-20.01: 2.2.2.8.9
+2.7.17,30417,Erroneously formatted tunnelling ConnectRequests are ignored,"KSG643-20.01: 2.2.1.3,2.2.1.4"
+2.7.18,30418,Tunnelling ConnectRequest with unsupported layer results in E_TUNNELLING_LAYER,KSG643-20.01: 2.2.1.5.1
+2.7.19,30419,Non-secure ConnectRequest while tunnelling is secured results in E_CONNECTION_TYPE,KSG643-20.01: 2.2.1.5.1
+2.7.20,30420,Tunnelling Information DIB,KSG643-20.01: 2.4.1.2
+2.7.21,30421,Tunnelling version is >= 2 in Supported Service Families DIB,KSG643-20.01: 2.7.3.4
+2.7.22,30422,Establishing a tunnelling connection while TP1 is disconnected,"KSG643-21.02: 2.2.1.5.1,2.2.1.5.3"
+2.7.23,30423,Tunnelling ConnectRequest with extended CRI,KSG643-20.01: 2.2.1.4
+2.7.24,30424,PID_TUNNELLING_USERS is ignored when tunnelling is set to non-secure,KSG616-20.03: 2.3.1.7.1
+2.7.25,30425,PID_TUNNELLING_USERS: 2 users associated with different slots,KSG616-20.03: 2.3.1.7.1
+2.7.26,30426,PID_TUNNELLING_USERS: 2 users associated with the same slot,KSG616-20.03: 2.3.1.7.1
+2.7.27,30427,PID_TUNNELLING_USERS: 1 user associated with 2 slots,KSG616-20.03: 2.3.1.7.1
+2.7.28,30428,PID_TUNNELLING_USERS: Users associated with 2 slots each,KSG616-20.03: 2.3.1.7.1

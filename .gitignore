@@ -71,3 +71,9 @@ services/ai-py/models/
 
 # On-box AI model mount (compose); weights provisioned at runtime
 infra/hub-compose/ai-models/
+
+# --- KNX licensed material & credentials: NEVER commit (see docs/architecture/knx-secure-document-inventory.md) ---
+*.knxkeys
+The KNX Standard*/
+KNX_Secure_Claude_Bundle*
+knx-licensed/

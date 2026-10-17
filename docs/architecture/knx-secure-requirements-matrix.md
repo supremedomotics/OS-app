@@ -1,127 +1,113 @@
 # KNX Secure — Specification & Requirements Traceability Matrix
 
-Last updated: 2026-10-17 (rev 2: official page content supplied by the project). **Zero normative requirements are verified.** No KNX specification document has been obtained or read by this project's tooling.
+**Revision 3 — 2026-10-17.** Supersedes revisions 1–2. Basis: the licensed documents in the supplied bundle, **opened and read in this
+session** (see `knx-secure-document-inventory.md` for exact titles, revisions, hashes, discrepancies, and what is still missing).
+Nothing here is claimed as *implemented* or *conformant* unless the Status column says so and names its evidence.
 
-Evidence classes used in the "Source" column: **C** confirmed from an authorized normative document actually read ·
-**P** supplied by the project as verified content of an official KNX page (reported by a person, NOT fetched by this tool) ·
-**S** secondary-source interpretation · **U** unresolved · **D** SupremeOS implementation decision (not a KNX requirement).
-`P` establishes *which documents apply*; it says nothing about their normative content. Every protocol requirement is still **U**; nothing is **C**.
+## 0. Conventions
 
-## 0. Research log
+**Evidence classes** (Source column)
+* **C** — confirmed from an authorized normative document actually read; document, revision and clause given. Informative annexes are marked *(inf.)*.
+* **T** — described only in a conformance-test document (TSSK/TSSJ). A test is **not** a specification; T rows never become "implemented" on their own.
+* **U** — unresolved: the governing document is not in the bundle.
+* **D** — SupremeOS implementation decision (not a KNX requirement).
 
-### 0.1 Accessibility from this environment (re-tested 2026-10-17)
+**Status vocabulary**: *not started* · *spec only* (read & mapped, no code) · *codec* (pure encode/decode) · *unit-verified* (passes the spec's own worked example **and** independent property tests) · *simulator* · *loopback-UDP/TCP* · *HW* (real hardware).
+**Nothing is HW-validated.** There is no KNX hardware, no secure device and no ETS in this environment.
 
-| Source | Result here | Basis |
-|---|---|---|
-| support.knx.org — Updating stack for KNX Secure | **Not reachable** | `WebFetch`: `ENOTFOUND`; `getent hosts` no DNS; `curl` via proxy → 000 |
-| support.knx.org — KNX Specifications | **Not reachable** | same |
-| support.knx.org — KNX Security overview | **Not reachable** | same |
-| support.knx.org — Keyring File Format | **Not reachable** | same |
-| chatgpt.com — KNX Specifications Navigator | **Not reachable** | `ENOTFOUND`. **No question has been put to it.** |
-| knx.org, my.knx.org | **Not reachable** | no DNS |
+**Document short names**: **IPS** = *03_08_09 KNX IP Secure v01.01.02 AS*; **TUN** = *03_08_04 Tunnelling v01.07.01 AS*; **AL** = *03_03_07 Application Layer v02.01.01 AS*;
+**TSSK** = *Test Suite Supplement K, KNX IP Secure Tests v1.1 AS*; **TSSJ** = *Test Suite Supplement J, KNX Data Security Tests v1.11 AS*.
 
-**This tool fetched none of these pages.** Everything in 0.2 is content supplied by the project and recorded as evidence class **P**.
+## 1. KNX IP Secure (transport layer) — normative source IPS
 
-### 0.2 Evidence supplied by the project (class P — not independently fetched here)
+| ID | Requirement (paraphrased) | Source | Impl status | Tests / evidence | Conformance cases (TSSK) | HW | Uncertainty / blocker |
+|---|---|---|---|---|---|---|---|
+| IPS-01 | Secure frames use the standard 6-octet KNXnet/IP header, protocol version 10h, service-type high octet 09h; family range 0950h–09FFh; defined types 0950 SECURE_WRAPPER, 0951 SESSION_REQUEST, 0952 SESSION_RESPONSE, 0953 SESSION_AUTHENTICATE, 0954 SESSION_STATUS, 0955 TIMER_NOTIFY | C: IPS §2.2.1.2.1, §2.2.1.3.1, §2.2.2.4.2, §2.2.3.6–9, §2.6.1.1 | see §6 | see §6 | 2.1.5, 2.2.1, 2.2.6 (cite §2.2.1.3.1) | — | — |
+| IPS-02 | SECURE_WRAPPER body: session id (2) · sequence information (6) · KNX serial number (6) · message tag (2) · encapsulated KNXnet/IP frame (incl. its header) · MAC (16). Minimum frame 44 octets. Not nestable | C: IPS §2.2.1.3.1, §2.2.1.3.3, §2.2.1.2.2.2, §2.2.3.5.1 | see §6 | see §6 | 2.1.5, 2.2.27, 2.1.40 | — | — |
+| IPS-03 | Wrapper CCM: A = wrapper header ‖ session id (a = 8); P = encapsulated frame; B0 = SeqInf‖SerialNr‖Tag‖Q(2 octets); Ctrᵢ = SeqInf‖SerialNr‖Tag‖FFh‖[i]; MAC = full 128-bit CBC-MAC, encrypted with S0; generic CCM steps per AL Annex A.3 | C: IPS §2.2.1.3.2 + C(inf.): AL Annex A.2–A.3; worked examples IPS Annex A.3.3, A.4.2, A.5.2 (inf.) | see §6 | see §6 | 2.1.1, 2.2.1 | — | informative-annex vectors only; no certified vector set |
+| IPS-04 | Reception: drop frames < 44 octets; drop unknown/disconnected session id; unicast: drop if sequence ≤ last received (may check before MAC); drop on MAC mismatch; multicast: MAC checked **before** the timer value is evaluated | C: IPS §2.2.1.3.3 | see §6 | see §6 | 2.2.6, 2.2.37 | — | — |
+| IPS-05 | Session key = first 16 octets of SHA-256(shared secret), shared secret = Curve25519(myPrivate, peerPublic) (little-endian); **new key pair for every session**, from a cryptographically safe source; never reused | C: IPS §2.2.3.1.1–2; example IPS Annex A.2.4 (inf.) | see §6 | see §6 | 2.2.35 (different key after power cycle) | — | — |
+| IPS-06 | SESSION_REQUEST: 46 octets = header · HPAI control endpoint (**TCP route-back: protocol 02h, 0.0.0.0:0**) · client public value X (32). Valid only over TCP; client waits ≤ 10 s | C: IPS §2.2.3.6.1–4; example Annex A.1 (inf.) | see §6 | see §6 | 2.2.2, 2.2.25, 2.2.28 | — | — |
+| IPS-07 | SESSION_RESPONSE: 56 octets = header · session id (2, **non-zero for unicast**) · server public value Y (32) · MAC (16). MAC via CCM keyed with the Device Authentication Code, A = header‖session id‖(X⊕Y) (a = 40), P empty, B0 = 0…0‖Q(0000h), Ctr0 = 0…0‖FFh‖00h. Client "optionally" validates | C: IPS §2.2.3.7.1–5; example Annex A.2.2–A.2.3 (inf.) | see §6 | see §6 | 2.2.2 (+ `GlPro_SecureSessionSetup`) | — | **D: SupremeOS validates the MAC and the extra checks the test tool performs (Y ≠ 0, Y ≠ X, id ≠ 0, header/length) and fails closed** — stricter than "optional" |
+| IPS-08 | Device Authentication Code = PBKDF2(HMAC-SHA-256, secret, salt `"device-authentication-code.1.secure.ip.knx.org"`, 65 536 iterations, 128-bit). Ex-factory value = FDSK | C: IPS §2.3.1.3.1, §2.3.1.3.3, §2.2.3.4; example Annex A.2.2 ("trustme") (inf.) | see §6 | see §6 | — | — | the **keyring supplies** the real secret/FDSK — KR rows blocked |
+| IPS-09 | SESSION_AUTHENTICATE: 24 octets = header · reserved 00h · user id · MAC. Only inside a SECURE_WRAPPER. User id 01h management, 02h–7Fh user; others reserved. MAC via CCM keyed with the **password hash**; A = header‖00h‖userId‖(X⊕Y) (a = 40), P empty. **One authenticate per ECDH session** — retry requires a new handshake | C: IPS §2.2.3.8.1–5, §2.2.3.8.3; example Annex A.3 (inf.) | see §6 | see §6 | 2.2.2, 2.2.4, 2.2.14, 2.2.15, 2.2.17, 2.2.22, 2.2.23, 2.2.29 | — | — |
+| IPS-10 | Password hash = PBKDF2(HMAC-SHA-256, password, salt `"user-password.1.secure.ip.knx.org"`, 65 536, 128-bit). Empty password hash is fixed (E9C304B9…) | C: IPS §2.3.1.4.1, §2.3.1.4.3; example Annex A.3.1 ("secret") (inf.) | see §6 | see §6 | — | — | passwords come from keyring/user (KR blocked) |
+| IPS-11 | SESSION_STATUS: 8 octets, inside a wrapper; status 00 AUTHENTICATION_SUCCESS, 01 AUTHENTICATION_FAILED, 02 UNAUTHENTICATED, 03 TIMEOUT, 04 KEEPALIVE (client), 05 CLOSE; ending statuses unconfirmed (TCP may be closed immediately); wait ≤ 10 s | C: IPS §2.2.3.9.1–2, §2.4.1; example Annex A.4 (inf.) | see §6 | see §6 | 2.2.7, 2.2.8, 2.2.18–2.2.21 | — | — |
+| IPS-12 | Session state machine (server view): auth timeout 10 s, idle session timeout 60 s; client may send KEEPALIVE; any non-authenticate frame before success → UNAUTHENTICATED; failed authenticate → FAILED + close | C: IPS §2.2.3.5.2.1–6, §2.4.1 | see §6 (client view) | see §6 | 2.2.5, 2.2.13, 2.2.16, 2.2.18–2.2.23, 2.2.37, 2.2.38 | — | — |
+| IPS-13 | Unicast sequence: 48-bit counter per direction, **starts at 0** per connection, +1 per frame sent; receiver stores the last received and discards ≤; no requirement of +1 steps; no wrap-around design (9-year bound noted) | C: IPS §2.2.3.3; §2.2.1.3.1 | see §6 | see §6 | 2.2.24 (70224) | — | — |
+| IPS-14 | Secure unicast sessions **must use TCP and must not use UDP**; a session lives in one TCP connection; closing the TCP connection closes the session and its KNX connections | C: IPS §2.2.3.3, §2.2.3.6.4, §2.4.2 | **not started** (no TCP transport — gap G3) | — | 2.2.3, 2.2.9, 2.2.25 | — | — |
+| IPS-15 | Inside an authenticated session all connection traffic (CONNECT_REQUEST, TUNNELLING_REQUEST, CONNECTIONSTATE, DISCONNECT…) is wrapped; plain frames for those connections are ignored; Disconnect/ConnectionState outside the session → E_CONNECTION_ID | C: IPS §2.4.1 | **not started** | — | 2.2.30–2.2.34, 2.2.36 | — | numeric value of E_CONNECTION_ID **U** (Overview absent) |
+| IPS-16 | Unwrapped CONNECT_REQUEST accepted only if the family is non-secure; tunnelling access: management user always, other users via PID_TUNNELLING_USERS; tunnelling addresses linked to users | C: IPS §2.2.1.4.2, §2.3.1.8; TUN §5.4.3.3 | server-side; client must request an allowed address (Extended CRI, TUN §5.4.3.2) | — | 2.7.14, 2.7.19, 2.7.23–2.7.28 | — | G5 |
+| IPS-17 | Discovery: secure-capable servers list service family 09h version 01h and a *Secured Service Families* DIB (type 06h) **only** in extended search responses | C: IPS §2.6.2.1–2 | **not started** (needs Core v2 SearchRequestExtended) | — | 2.6.15–2.6.17 | — | **U**: Core v2 absent |
+| IPS-18 | Multicast secure routing: session id 0000h; seq-info = 48-bit ms timer `mc_timer`; Secure Backbone Key (128-bit, per multicast address); latency tolerance default 2000 ms, sync fraction default 200 ms | C: IPS §2.2.2.1–2.2.2.3, §2.3.1.2, §2.3.1.6–7 | codec only (§6); runtime **not started** | — | 2.1.x | — | routing not in scope of current driver |
+| IPS-19 | TIMER_NOTIFY: 0955h, fixed 36 octets; A = header (6), P empty, B0 = timer‖serial‖tag‖0000, Ctr0 = …FFh 00h; state machine events E01–E11, actions A0–A9 | C: IPS §2.2.2.3.2, §2.2.2.4; example Annex A.6 (inf.) | codec only (§6); state machine **not started** | — | 2.1.6–2.1.39 | — | — |
+| IPS-20 | `mc_timer` must never decrease, must be persisted across power loss; authentic timer acquisition procedure; persistence interval rules | C: IPS §2.2.2.2.2, §2.2.2.3.2.8, §2.2.4.2 | **not started** | — | 2.1.8 | — | — |
+| IPS-21 | CSPRNG required; fresh seed per power cycle | C: IPS §2.2.4.1 | D: use `node:crypto` CSPRNG | test: see §6 | — | — | — |
+| IPS-22 | TCP stream handling for KNXnet/IP (fragmented / merged frames, malformed headers closing the connection, idle timeouts) | **U**: Core v2 (3/8/2) absent; T: TSSK 2.5.1–2.5.18 | **not started** | — | 2.5.x | — | **blocker for verified TCP behaviour**; header-driven deframing is derivable from the common header |
+| IPS-23 | Tunnelling inside TCP: sequence counter not evaluated; **no** TUNNELLING_ACK sent; received ACKs ignored | C: TUN §2.6.2 | **not started** | — | 2.5.19, 2.5.20, 2.7.6 | — | — |
+| IPS-24 | Secure tunnelling is the same tunnelling procedure carried in the session (CONNECT_REQUEST with two route-back HPAIs and a basic/extended CRI) | C: IPS §2.4.1; T: TSSK `GlPro_EstablishTunnellingConnection` | **not started** | — | 2.7.x | — | HPAI-over-TCP details are Core v2 (**U**) |
 
-| Item | Supplied statement | Where it is used |
-|---|---|---|
-| Official AN ↔ feature mapping | The KNX "stack requirements" page lists **Data Secure:** AN 158, 163, 177, 170, 193, 194. **IP Secure:** AN 159, 183, 185, 184. | document set in 0.3; corrects the earlier unconfirmed/conflicting mapping |
-| Specifications page | The Navigator is an **aid, not an authoritative source**; the full specifications are available **to KNX members**. | rule below; acquisition route |
-| Pages named | Updating stack for KNX Secure · KNX Specifications · KNX Security overview · Keyring File Format · Navigator | research leads |
+## 2. Standard tunnelling (verified against TUN) — see `knx-native-tunnelling-audit.md`
 
-**Corrections to earlier revisions of this repo's docs:** the previous revision said the mapping "AN 158 = Data, AN 159 = IP" conflicted with a search snippet and was unconfirmed. Per the supplied official mapping the project's mapping is **correct**; the earlier snippet was wrong or garbled. Also corrected: AN 183/184/185 are **IP Secure** dependencies (not generic IP documents), so classic-tunnelling assumptions in `native/` must be re-checked against them (see IPS-11).
+| ID | Requirement | Source | Native status | Evidence | HW |
+|---|---|---|---|---|---|
+| TUN-01 | Service types 0420h/0421h; 4-octet connection header; CRD with assigned IA; layers 02/04/80; type 04h | C: TUN §5.4 | codec, simulator | `knxnetip-frame.test.ts`, `tunnel-client.test.ts` | — |
+| TUN-02 | UDP: 1 s ack timeout, repeat once, same sequence | C: TUN §2.6.1 | simulator | `tunnel-client.test.ts` | — |
+| TUN-03 | After failure to be ACKed (timeout or error status): repeat once, **then terminate with DISCONNECT_REQUEST** | C: TUN §2.6.1 | **gap G1/G2 → fixed this session (see §6)** | — | — |
+| TUN-04 | Inbound sequence rules (expected / expected−1 / otherwise) | C: TUN §2.6.1 | simulator | `tunnel-client.test.ts` | — |
+| TUN-05 | Extended CRI (6 octets with requested IA) | C: TUN §5.4.3.2 | **not started (G5)** | — | — |
+| TUN-06 | TUNNELLING_FEATURE_GET/RESPONSE/SET/INFO (0422h–0425h) and Interface Features | C: TUN §3 | **not started (G4)** | — | — |
+| TUN-07 | TCP-mode tunnelling rules | C: TUN §2.6.2 | **not started (G3)** | — | — |
+| TUN-08 | Connection-header length: Fig. 8/16 = 04h; Fig. 15 prints 06h | C but self-contradictory | strict 04h kept; **erratum E1** | — | needs real capture |
 
-**Navigator rule (from the supplied Specifications page):** Navigator answers are leads only. A requirement becomes **C** only when read in the member-licensed specification text itself, with document, revision and section recorded.
+## 3. KNX Data Secure (application layer) — normative source AL §5 and Annexes A, C (integrates AN158)
 
-### 0.3 Document register — what is needed (class P for the *list*; nothing obtained)
+| ID | Requirement (paraphrased) | Source | Impl status | Tests / evidence | Conformance cases (TSSJ) | HW | Uncertainty / blocker |
+|---|---|---|---|---|---|---|---|
+| DS-01 | Secured APDU: APCI "Secure" = 3F1h; Security Control Field (1 octet: tool-access bit, SAI, system-broadcast bit, S-AL service: 000 data, 010 sync req, 011 sync res); SAI 000 = CCM auth only, 001 = CCM auth + confidentiality; other values reserved | C: AL §5.1.3.1, §5.2.1.2 (Fig. 105–107, Table 6–7) | **not started** (blocked, see policy below) | — | 3.1.4–3.1.8 | — | scope decision: Data Secure stays BLOCKED pending resources doc |
+| DS-02 | Secure Data = SeqNr (6) ‖ [plain APDU or ciphertext] ‖ MAC (**4 octets** = MSB32(Yn)) | C: AL §5.1.3.4–5, Annex A.3 | **not started** | — | — | — | — |
+| DS-03 | CCM for S-AL: B0 = SeqNr‖SA‖DA‖00h‖AT‖TPCI/APCISec‖00h‖q (q 1 octet); AT = A000EEEEb (A = address type); Ctrⱼ = SeqNr‖SA‖DA‖00 00 00 00 01‖[j]; auth-only: A = SCF‖000000b‖plain APDU, P empty; A+C: A = SCF, P = 000000b‖plain APDU | C: AL §5.1.3.2–5; Annex A (inf.); worked examples Annex C.1.1–C.1.4 (inf.) | **primitive shared with IPS-03 (§6); S-AL itself not started** | primitive verified against C.1.x (§6) | — | — | — |
+| DS-04 | Receive order: verify SCF (reserved/unsupported → drop, **not logged**) → verify SeqNr → decrypt → verify MAC; **after** success check the 000000b field; on any failure the plain APDU is **not** passed up even in auth-only mode ("no exceptions to a failed security check") | C: AL §5.1.3.4.2, §5.1.3.5.2, §5.2.1.4, §5.5.2 | **not started** | — | 3.1.x, 3.2.x | — | — |
+| DS-05 | Sequence numbers: 48-bit; one sending counter for **all** secure communication; incremented on every S-A_Data handed to TL **even if transmission fails**; never wraps (stops at FFFFFFFFFFFFh); receiver keeps "Last Valid SeqNr" **per sender IA**; > accept, = ignore silently, < ignore + failure log; persist at power-down; initial value 1–255, **not 0**; re-init after master reset | C: AL §5.3.1 | **not started** | — | 3.1.9, 3.1.10 … | — | persistence + initial value for a *non-device* participant is **U** (no resource doc) |
+| DS-06 | S-A_Sync: request (SeqNr_local, serial number, challenge, MAC) / response (challenge⊕random, SeqNr_remote, SeqNr_local) encrypted A+C; 6 s timeout; responder rate-limit 1 s; sequence reconciliation rules | C: AL §5.3.2; Annex C.1.3–C.1.4 (inf.) | **not started** | — | 3.3.x, 3.4.x | — | needed if SupremeOS must learn peers' counters (**U**: keyring may supply them) |
+| DS-07 | Group communication: look up GA in the Group Key Table; tool-access flag on a group telegram = attack (counted, dropped); verify before forwarding; GA not in table → ignore; non-S-A_Data telegrams forwarded unchanged; sending with par_auth/par_conf requires the GA in the table, else negative confirm | C: AL §5.5.3 | **not started** | — | 3.2.x | — | **Group Key Table / Group Object flags live in Resources [04] — absent (U)** |
+| DS-08 | Security failure registration (cryptographic errors; optional SeqNr-error counter) | C: AL §5.4 | **not started** | — | — | — | for SupremeOS: diagnostics only |
+| DS-09 | Fail-safe for unrecognised APDUs on groups | D (consistent with C: AL §5.5.2.1) | **done**: non-plain group APCIs withheld & counted (`undecodedGroupTelegrams`) | `security.test.ts` (APCI 3F1h case — which is the **real** secure APCI) | — | — | counter cannot distinguish secured from other unknown APDUs |
+| DS-10 | Access Policies (AN193), Master Reset (AN194), Coupler proxy (AN192), PB-mode config (AN169, Draft) | C: scope read | **N/A for a tunnel client** (server/device side) | — | 3.6, 3.7, 3.8 | — | revisit only if SupremeOS emulates a secure *device* |
+| DS-11 | Key sources: Group Key Table, P2P Key Table, Tool Key, FDSK, Security IA table, PID_SEQUENCE_NUMBER_SENDING, Group Object security flags | **U**: Chapter 3/5/1 Resources (cited by AL [04]) absent | — | — | 2.x | — | **BLOCKER** |
 
-| Document | Role | Title known? | Revision needed | Status |
+**Policy (D):** All Data Secure runtime items stay **BLOCKED** until Resources [04] and the keyring format are supplied, even though the S-AL
+codec rules (DS-01…DS-06) are fully readable: shipping a verifier without the key/sequence-state model would invite a false sense of
+coverage. The shared CCM primitive is delivered because IP Secure requires it (IPS-03) and Data Secure's own worked examples then
+serve as additional verification of that primitive.
+
+## 4. Keyring, credentials, commissioning
+
+| ID | Requirement | Source | Status | Blocker |
 |---|---|---|---|---|
-| AN 158 | Data Secure (core) | "Data Security" (as supplied earlier; unverified on page) | exact current revision — **unknown** | BLOCKED |
-| AN 163, 177, 170, 193, 194 | Data Secure additional requirements | **titles unknown — not recorded** | **unknown** | BLOCKED |
-| AN 159 | IP Secure (core) | "IP Security" (as supplied; unverified on page) | **unknown** | BLOCKED |
-| AN 183 | IP Secure dependency | "IP System Broadcast" (as supplied; unverified) | **unknown** | BLOCKED |
-| AN 184 | IP Secure dependency | "IP Core v2" (as supplied; unverified) | **unknown** | BLOCKED |
-| AN 185 | IP Secure dependency | "IP Tunneling v2" (as supplied; unverified) | **unknown** | BLOCKED |
-| Keyring file format description | `.knxkeys` structure, integrity, encryption | page exists (P); content unseen | current revision **unknown** | BLOCKED |
-| KNX Standard volumes the ANs reference (e.g. cEMI, application layer, KNXnet/IP Core/Tunnelling/Routing) | base protocol for the above | **not enumerated** — to be read off AN 158/159 normative references | **unknown** | BLOCKED |
-| Conformance / test specifications and vectors for Secure | lawful test vectors | **existence and access terms unknown** | **unknown** | BLOCKED |
+| KR-01 | `.knxkeys` file structure, integrity/signature, encryption | **U** — searched all 12 documents: **no occurrence of "keyring", "knxkeys", "knxproj"** | **BLOCKED** | document absent |
+| KR-02 | Mapping of keyring contents to IPS credentials (device authentication code / FDSK, user password hashes, backbone key) and DS credentials (group keys, tool key, per-device sequence info) | **U** (roles themselves are C: IPS §2.3.1, AL §5.1.3.2/5.5.3, but the *file → role* mapping is absent) | **BLOCKED** | document absent |
+| KR-03 | ETS commissioning side effects needed for SupremeOS to be accepted (tunnelling address ↔ user, peers' Security IA tables, sequence-number registration) | partially C: IPS §2.3.1.8, TUN §5.4.3.3; remainder **U** | **BLOCKED** (partial) | Resources [04], Mgmt/Config procedures [05] absent |
+| KR-04 | Format-independent validation/activation infrastructure | D | **done** (`import-activation.ts`, prior session) | — |
 
-Open: whether ANs 158/159 are *superseded or merged* into a later Standard release (revision history unseen); the "Updating stack for KNX Secure" page presumably lists the minimum revisions — **U**, read it once reachable.
+## 5. Spec-independent controls delivered earlier (unchanged; see previous revision for evidence)
+S-01…S-15: secret redaction, encrypted key store (unlock-mode bound, generation/lock), transactional import, fail-closed policy & flags,
+simulator isolation. These implement **decisions (D)**, not KNX requirements.
 
-### Questions to put to the Navigator once reachable (and verify against documents)
-Q1 exact documents/sections/revisions for IP Secure and Data Secure and their dependencies · Q2 secure session
-establishment and credential derivation · Q3 secured frame format, authentication boundary, nonce construction ·
-Q4 counters/sequence/replay/out-of-order rules and exhaustion · Q5 Data Secure APDU format, key roles, sequence
-synchronisation · Q6 keyring file structure, integrity check, password handling, relationship rules · Q7 secure routing and
-timer sync · Q8 reconnect/session-recovery rules · Q9 conformance vectors availability · Q10 v2 Core/Tunnelling impact.
+## 6. Implementation status of this session's IP Secure work
+*(Filled in after implementation — see `knx-secure-security-test-report.md` for the authoritative, test-backed status. Until that
+section says otherwise, every row above reads "not started" / "spec only".)*
 
-## 1. Matrix
+## 7. Still-missing documents (ordered by what they unblock)
 
-Columns: **Source** (evidence class + document; section/revision only when C) · **Obtained?** · **Impl** · **Tests** · **HW** · **Uncertainty / blocker**.
-
-### 1.1 Delivered, spec-independent (decisions D, verifiable now)
-
-| ID | Feature / layer | Source | Obtained? | Impl | Tests | HW | Uncertainty |
-|---|---|---|---|---|---|---|---|
-| S-01 | Secret redaction (all output paths) / key hygiene | D | n/a | **done** `secret.ts` | 3 | n/a | Cannot stop callers printing a `use()`d buffer |
-| S-02 | At-rest encrypted store, no plaintext/names, mode 0600/0700 | D | n/a | **done** `keystore.ts` | 6 | n/a | No TPM; root/compromised process out of scope |
-| S-03 | Wrong secret ≡ tampering (one error); header incl. mode+generation authenticated | D | n/a | **done** | 4 (+3 mutation-verified) | n/a | — |
-| S-04 | Atomic write; failed/interrupted write leaves prior store intact | D | n/a | **done** | 3 (fault-injected; runs as root) | n/a | Dir-fsync after rename not done |
-| S-05 | Value-free audit of every mutation | D | n/a | **done** | 2 | n/a | Audit sink tamper-evidence not provided |
-| S-06 | Secure-required endpoint fails closed; no downgrade | D | n/a | **done** `policy.ts` | 3 | n/a | Enforced for the native client only; legacy driver unaudited |
-| S-07 | Non-plain group APDUs withheld + counted, never decoded | D | n/a | **done** | 1 | n/a | Counter does not identify secured traffic |
-| S-08 | Simulator isolated from production / real addresses | D | n/a | **done** | 2 | n/a | Static scan covers `src/` imports only |
-| S-09 | Pluggable unlock provider; mode bound to store; no silent fallback | D | n/a | **done** `unlock.ts` | 7 | n/a | — |
-| S-10 | TPM 2.0 unlock | D | n/a | **seam only** (`TpmUnlockProvider`, fake driver in tests) | 3 (fake) | **NOT validated; no TPM in sandbox** | Concrete driver, PCR policy, provisioning, recovery all unbuilt. Not hardware-backed. |
-| S-11 | External key file unlock (transitional) | D | n/a | **done** | 1 | n/a | Weaker; flagged `transitional` |
-| S-12 | Concurrent-writer safety: lock file + generation lost-update detection | D | n/a | **done** | 4 | n/a | Lock is advisory/local-host only; no cross-host/NFS safety |
-| S-13 | Rollback resistance | D | n/a | **NOT PROVIDED** | 1 test asserts the limitation | n/a | Needs trusted monotonic counter (e.g. TPM NV counter) |
-| S-14 | Transactional, confirmed, audited import activation (format-agnostic) | D | n/a | **done** `import-activation.ts` | 5 | n/a | No parser/validators for the real format |
-| S-15 | Fail-closed feature flags (`SUPREME_KNX_NATIVE[_SECURE]`) | D | n/a | **done** `native-flags.ts` | 2 | n/a | Not yet consumed by any driver |
-
-### 1.2 KNX IP Secure
-
-| ID | Feature / layer | Source | Obtained? | Impl | Tests | HW | Blocker |
-|---|---|---|---|---|---|---|---|
-| IPS-01 | Secured IP frame format | P: AN 159 (§/rev U) | no | not started | — | — | BLOCKED-SPEC |
-| IPS-02 | Session establishment / authentication | P: AN 159 (§/rev U) | no | not started | — | — | BLOCKED-SPEC |
-| IPS-03 | Credential derivation from keyring | P: AN 159 + keyring page (§/rev U) | no | not started | — | — | BLOCKED-SPEC |
-| IPS-04 | Per-message authentication/encryption, nonce | P: AN 159 (§/rev U) | no | not started | — | — | BLOCKED-SPEC |
-| IPS-05 | Sequence / replay / reorder / duplicates | P: AN 159 (§/rev U) | no | not started | — | — | BLOCKED-SPEC |
-| IPS-06 | Session status, timeouts, renewal, counter exhaustion | P: AN 159 (§/rev U) | no | not started | — | — | BLOCKED-SPEC |
-| IPS-07 | Secure tunnelling | P: AN 159, 185 (§/rev U) | no | not started | — | not validated | BLOCKED-SPEC, BLOCKED-HW |
-| IPS-08 | Secure routing, timer sync | P: AN 159, 183 (§/rev U) | no | not started | — | not validated | BLOCKED-SPEC, BLOCKED-HW |
-| IPS-09 | Reconnect without counter reuse | P: AN 159 (§/rev U) | no | not started | — | — | BLOCKED-SPEC |
-| IPS-10 | TCP transport variant (if required) | U (AN 159/185?) | no | not started | — | — | BLOCKED-SPEC |
-| IPS-11 | v2 Core / Tunnelling / System Broadcast (AN 183/184/185) | P: AN 183, 184, 185 listed under IP Secure (applicability to plain tunnelling U) | no | not started | — | — | BLOCKED-SPEC |
-
-### 1.3 KNX Data Secure
-
-| ID | Feature / layer | Source | Obtained? | Impl | Tests | HW | Blocker |
-|---|---|---|---|---|---|---|---|
-| DS-01 | Secured APDU recognition and format | P: AN 158 (§/rev U) | no | not started | — | — | BLOCKED-SPEC |
-| DS-02 | Verify-then-decode receive path | P: AN 158 (§/rev U) | no | policy half only (S-07) | — | — | BLOCKED-SPEC |
-| DS-03 | Secured send | P: AN 158 (§/rev U) | no | not started | — | not validated | BLOCKED-SPEC, BLOCKED-HW |
-| DS-04 | Sequence numbers, freshness, synchronisation | P: AN 158 (§/rev U) | no | not started | — | — | BLOCKED-SPEC |
-| DS-05 | Per-GA / per-device key mapping | P: AN 158 + keyring page (§/rev U) | no | not started | — | — | BLOCKED-SPEC |
-| DS-06 | Mixed secure + plain objects | P: AN 158 (§/rev U) | no | not started | — | not validated | BLOCKED-SPEC |
-| DS-07 | Related application notes (163/177/170/193/194) | P: AN 163, 177, 170, 193, 194 listed (content/titles U) | no | not started | — | — | BLOCKED-SPEC |
-
-### 1.4 Keyring
-
-| ID | Feature | Source | Obtained? | Impl | Tests | HW | Blocker |
-|---|---|---|---|---|---|---|---|
-| KR-01 | File structure, integrity/signature | P: Keyring File Format page (content unseen) | no | not started | — | — | BLOCKED-SPEC |
-| KR-02 | Decryption with keyring password | P: Keyring File Format page (content unseen) | no | not started | — | — | BLOCKED-SPEC |
-| KR-03 | Relationship validation (interfaces, devices, GAs, projects) | P: Keyring File Format page (content unseen) | no | infrastructure only (S-14) | — | — | BLOCKED-SPEC |
-| KR-04 | Separation of IP-Secure vs Data-Secure credentials in storage | P: Keyring File Format page; AN 158/159 (U) | no | namespacing convention only | — | — | BLOCKED-SPEC |
-
-### 1.5 Standard KNX (no spec blocker; not Secure-specific)
-
-| ID | Feature | Impl | Tests | HW |
-|---|---|---|---|---|
-| STD-01 | Tunnelling, framing, cEMI, DPT (15 mains), UDP loopback | done (classic KNXnet/IP) | 146 native + legacy 442 | **none — simulator/loopback only** |
-| STD-02 | Routing | not started | — | — |
-| STD-03 | Group-address state / feedback attribution in native stack | not started (legacy driver does it) | — | — |
+| Priority | Document | Unblocks |
+|---|---|---|
+| 1 | Chapter 3/8/2 **KNXnet/IP Core (v2)** | TCP behaviour, connection/heartbeat/disconnect, HPAI/CRI over TCP, Search Request Extended — IPS-14/17/22/24 |
+| 1 | Chapter 3/8/1 **KNXnet/IP Overview** | all status/error code values — E_CONNECTION_ID & friends |
+| 1 | **ETS keyring file format description** | KR-01…KR-03 |
+| 2 | Chapter 3/5/1 **Resources** (Security Interface Object, key tables, FDSK, security flags) | DS-05/07/11 |
+| 2 | Volume 6 **Profiles** | which features a tunnelling client must support (TUN-06) |
+| 3 | Chapter 3/5/2 Management & 3/5/3 Configuration Procedures | secure sync procedures, commissioning |
+| 3 | Chapter 3/8/3 Device Management v2 | secure device-management connections |
+| 3 | standalone AN158 v07 AS (2019.08.20) | to confirm the Application Layer integration is complete |
+| 4 | EITT test templates / any official conformance vectors | executing conformance rather than describing it |
