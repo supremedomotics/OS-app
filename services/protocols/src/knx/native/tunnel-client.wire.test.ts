@@ -4,6 +4,7 @@ import { parseGroupAddress } from "./address.js";
 import { encodeDpt } from "./dpt.js";
 import { encodeConnectResponse, encodeTunnellingAck, HostProtocol, ServiceType, StatusCode, encodeConnectionStateResponse, decodeFrame } from "./knxnetip-frame.js";
 import { KnxTunnelClient } from "./tunnel-client.js";
+import type { TunnelLink, TunnelLinkHandlers } from "./tunnel-link.js";
 import type { KnxDatagramSocket, RemoteInfo, SocketFactory, SocketHandlers } from "./transport.js";
 import { ManualClock, VirtualActuator, VirtualKnxBus, VirtualKnxInterface, VirtualNetwork } from "./simulator/index.js";
 
@@ -177,5 +178,27 @@ describe("route-back addressing", () => {
     await expect(p).rejects.toMatchObject({ code: "socket_error" });
     expect(f.closed()).toBe(1);
     void decodeFrame; void encodeConnectionStateResponse;
+  });
+});
+
+describe("TunnelLink seam", () => {
+  it("the client runs over an injected link and never needs a socket factory; route-back is delegated with the announced data endpoint", async () => {
+    const calls: string[] = []; let h!: TunnelLinkHandlers; const clock = new ManualClock();
+    const link: TunnelLink = {
+      kind: "datagram",
+      open: async (x) => { h = x; calls.push("open"); },
+      send: (f) => calls.push(`send:${f.readUInt16BE(2).toString(16)}`),
+      routeBack: (a) => calls.push(`routeBack:${a ? `${a.address}:${a.port}` : "none"}`),
+      close: () => calls.push("close"),
+    };
+    const c = new KnxTunnelClient({ host: GW, link, clock });
+    const p = c.connect(); await clock.advance(1);
+    h.onFrame(connectResp({ address: GW, port: 3672 })); await p;
+    const d = c.disconnect(); await clock.advance(1);
+    h.onFrame((await import("./knxnetip-frame.js")).encodeDisconnectResponse({ channelId: 7, status: StatusCode.NO_ERROR })); await d;
+    expect(calls).toEqual(["open", "send:205", `routeBack:${GW}:3672`, "send:209", "close"]);
+  });
+  it("requires a socket factory or a link", () => {
+    expect(() => new KnxTunnelClient({ host: GW })).toThrow(expect.objectContaining({ code: "invalid_argument" }));
   });
 });

@@ -28,7 +28,8 @@ import {
   NAT_HPAI, ServiceType, StatusCode, TunnelLayer,
 } from "./knxnetip-frame.js";
 import { assertPolicySatisfiable, PLAIN_POLICY, type SecurityPolicy } from "./security/policy.js";
-import { systemClock, type Clock, type KnxDatagramSocket, type RemoteInfo, type SocketFactory, type TimerHandle } from "./transport.js";
+import { UdpTunnelLink, type TunnelLink } from "./tunnel-link.js";
+import { systemClock, type Clock, type SocketFactory, type TimerHandle } from "./transport.js";
 
 export type TunnelErrorCode =
   | "invalid_argument" | "not_connected" | "connect_timeout" | "connect_rejected" | "socket_error"
@@ -48,7 +49,10 @@ export interface TunnelClientOptions {
   /** Gateway IPv4 literal (discovery returns addresses; no DNS inside the protocol layer). */
   host: string;
   port?: number;
-  socketFactory: SocketFactory;
+  /** UDP socket source (the usual case). Required unless `link` is given. */
+  socketFactory?: SocketFactory;
+  /** Transport seam; defaults to {@link UdpTunnelLink} over `socketFactory`. Datagram semantics only (see tunnel-link.ts). */
+  link?: TunnelLink;
   clock?: Clock;
   layer?: number;
   /** Spec defaults: connect 10 s, ack 1 s (+1 retry), heartbeat 60 s / 10 s response / 3 tries,
@@ -160,8 +164,8 @@ export class KnxTunnelClient {
     "connectTimeoutMs" | "ackTimeoutMs" | "maxSendAttempts" | "heartbeatIntervalMs" | "heartbeatTimeoutMs" |
     "heartbeatMaxFailures" | "disconnectTimeoutMs" | "confirmationTimeoutMs" | "maxQueuedSends" | "maxPendingConfirmations" | "layer">>;
 
-  private socket: KnxDatagramSocket | null = null;
-  private target: RemoteInfo | null = null;
+  private readonly link: TunnelLink;
+  private linkOpen = false;
   private channelId: number | null = null;
   private assigned: number | null = null;
   private txSeq = 0;
@@ -191,6 +195,8 @@ export class KnxTunnelClient {
     assertPolicySatisfiable(opts.security ?? PLAIN_POLICY);
     this.clock = opts.clock ?? systemClock;
     this.port = opts.port ?? 3671;
+    if (!opts.link && !opts.socketFactory) throw new KnxTunnelError("invalid_argument", "either a socketFactory or a link is required");
+    this.link = opts.link ?? new UdpTunnelLink(opts.host, this.port, opts.socketFactory!);
     this.cfg = {
       connectTimeoutMs: opts.connectTimeoutMs ?? 10_000,
       ackTimeoutMs: opts.ackTimeoutMs ?? 1_000,
@@ -239,10 +245,12 @@ export class KnxTunnelClient {
     if (this._state !== "idle") throw new KnxTunnelError("invalid_argument", `connect() called in state "${this._state}"; clients are single-use`);
     this._state = "connecting";
     try {
-      this.socket = await this.opts.socketFactory({
-        onMessage: (data, from) => this.onDatagram(data, from),
+      await this.link.open({
+        onFrame: (data) => this.onFrame(data),
+        onForeign: () => { if (this._state !== "closed" && this._state !== "idle") this.stats.foreignDatagrams++; },
         onError: (err) => this.onSocketError(err),
       });
+      this.linkOpen = true;
     } catch (err) {
       const e = new KnxTunnelError("socket_error", `cannot open UDP socket: ${err instanceof Error ? err.message : String(err)}`);
       this.shutdown("socket_error", e);
@@ -250,7 +258,8 @@ export class KnxTunnelClient {
     }
     // shutdown() may have run while the socket was opening (e.g. disconnect() during connect).
     if (this._state !== "connecting") {
-      this.socket?.close();
+      this.link.close();
+      this.linkOpen = false;
       throw new KnxTunnelError("closed", "closed while connecting");
     }
     return new Promise<void>((resolve, reject) => {
@@ -262,7 +271,7 @@ export class KnxTunnelClient {
           this.shutdown("connect_timeout", e);
         }, this.cfg.connectTimeoutMs),
       };
-      this.transmit(encodeConnectRequest({ controlEndpoint: NAT_HPAI, dataEndpoint: NAT_HPAI, layer: this.cfg.layer }), { address: this.opts.host, port: this.port });
+      this.transmit(encodeConnectRequest({ controlEndpoint: NAT_HPAI, dataEndpoint: NAT_HPAI, layer: this.cfg.layer }));
     });
   }
 
@@ -306,7 +315,7 @@ export class KnxTunnelClient {
   private transmitFlight(f: InFlight): void {
     f.attempts++;
     if (f.attempts > 1) this.stats.sendRetries++;
-    this.transmit(f.frame, this.target!);
+    this.transmit(f.frame);
     f.timer = this.clock.setTimeout(() => {
       if (this.inFlight !== f) return;
       if (f.attempts < this.cfg.maxSendAttempts) { this.transmitFlight(f); return; }
@@ -318,9 +327,8 @@ export class KnxTunnelClient {
   // -------------------------------------------------------------------------------------
   // receive
 
-  private onDatagram(data: Buffer, from: RemoteInfo): void {
+  private onFrame(data: Buffer): void {
     if (this._state === "closed" || this._state === "idle") return;
-    if (from.address !== this.opts.host) { this.stats.foreignDatagrams++; return; }
     let frame;
     try { frame = decodeFrame(data); } catch (e) {
       if (e instanceof KnxFrameError) { bump(this.stats.malformedFrames, e.code); this.emitDecodeError("frame", e.code, data); }
@@ -329,16 +337,16 @@ export class KnxTunnelClient {
     this.stats.framesReceived++;
     this.stats.lastActivityAt = this.clock.now();
     try {
-      this.dispatch(frame.service, frame.body, from);
+      this.dispatch(frame.service, frame.body);
     } catch (e) {
       if (e instanceof KnxFrameError) { bump(this.stats.malformedFrames, e.code); this.emitDecodeError("frame", e.code, data); return; }
       throw e;
     }
   }
 
-  private dispatch(service: number, body: Buffer, from: RemoteInfo): void {
+  private dispatch(service: number, body: Buffer): void {
     if (this._state === "connecting") {
-      if (service === ServiceType.CONNECT_RESPONSE) this.onConnectResponse(body, from);
+      if (service === ServiceType.CONNECT_RESPONSE) this.onConnectResponse(body);
       else this.stats.unexpectedServices++;
       return;
     }
@@ -352,7 +360,7 @@ export class KnxTunnelClient {
     }
   }
 
-  private onConnectResponse(body: Buffer, from: RemoteInfo): void {
+  private onConnectResponse(body: Buffer): void {
     const r = decodeConnectResponse(body);
     const w = this.connectWaiter;
     if (!w) { this.stats.unexpectedServices++; return; }
@@ -364,13 +372,7 @@ export class KnxTunnelClient {
     this.connectWaiter = null;
     this.channelId = r.channelId;
     this.assigned = r.assignedAddress ?? null;
-    // Route-back mode: all further traffic goes to where the response came from.
-    // Use the announced data endpoint only when it is concrete and on the gateway's own address;
-    // a zero/foreign endpoint (NAT, or a gateway reporting an internal IP) means "answer where
-    // you heard from". Hardware validation of multi-port gateways is still outstanding.
-    const de = r.dataEndpoint;
-    const useAnnounced = de !== undefined && de.port !== 0 && de.address === this.opts.host;
-    this.target = { address: from.address, port: useAnnounced ? de.port : from.port };
+    this.link.routeBack(r.dataEndpoint);
     this._state = "connected";
     this.stats.connectLatencyMs = this.clock.now() - w.sentAt;
     this.scheduleHeartbeat();
@@ -425,7 +427,7 @@ export class KnxTunnelClient {
   private onTunnellingRequest(body: Buffer): void {
     const req = decodeTunnellingRequest(body);
     if (req.channelId !== this.channelId) { this.stats.wrongChannel++; return; }
-    const ack = (): void => this.transmit(encodeTunnellingAck({ channelId: req.channelId, sequence: req.sequence, status: StatusCode.NO_ERROR }), this.target!);
+    const ack = (): void => this.transmit(encodeTunnellingAck({ channelId: req.channelId, sequence: req.sequence, status: StatusCode.NO_ERROR }));
     if (req.sequence === this.rxSeq) {
       this.rxSeq = (this.rxSeq + 1) & 0xff;
       ack(); // transport-level ACK precedes (and is independent of) cEMI interpretation
@@ -468,7 +470,7 @@ export class KnxTunnelClient {
     this.hbSentAt = this.clock.now();
     this.hbTry++;
     this.stats.heartbeat.sent++;
-    this.transmit(encodeConnectionStateRequest({ channelId: this.channelId!, endpoint: NAT_HPAI }), this.target!);
+    this.transmit(encodeConnectionStateRequest({ channelId: this.channelId!, endpoint: NAT_HPAI }));
     this.hbRespTimer = this.clock.setTimeout(() => {
       this.stats.heartbeat.failures++;
       if (this.hbTry >= this.cfg.heartbeatMaxFailures) {
@@ -501,7 +503,7 @@ export class KnxTunnelClient {
   private onGatewayDisconnect(body: Buffer): void {
     const r = decodeDisconnectRequest(body);
     if (r.channelId !== this.channelId) { this.stats.wrongChannel++; return; }
-    this.transmit(encodeDisconnectResponse({ channelId: r.channelId, status: StatusCode.NO_ERROR }), this.target!);
+    this.transmit(encodeDisconnectResponse({ channelId: r.channelId, status: StatusCode.NO_ERROR }));
     this.shutdown("gateway_disconnect", new KnxTunnelError("gateway_disconnect", "gateway terminated the tunnel"));
   }
 
@@ -520,7 +522,7 @@ export class KnxTunnelClient {
     this._state = "disconnecting";
     this.clearHeartbeat();
     this.failPending(new KnxTunnelError("closed", "tunnel is disconnecting"));
-    this.transmit(encodeDisconnectRequest({ channelId: this.channelId!, endpoint: NAT_HPAI }), this.target!);
+    this.transmit(encodeDisconnectRequest({ channelId: this.channelId!, endpoint: NAT_HPAI }));
     this.disconnectTimer = this.clock.setTimeout(() => this.shutdown("local_disconnect"), this.cfg.disconnectTimeoutMs);
     await this.closedPromise;
   }
@@ -530,8 +532,8 @@ export class KnxTunnelClient {
 
   /** Spec-mandated teardown of a session whose frames cannot be delivered: tell the server, then close. */
   private terminate(reason: CloseReason, error: KnxTunnelError): void {
-    if (this._state === "connected" && this.channelId !== null && this.target) {
-      this.transmit(encodeDisconnectRequest({ channelId: this.channelId, endpoint: NAT_HPAI }), this.target);
+    if (this._state === "connected" && this.channelId !== null) {
+      this.transmit(encodeDisconnectRequest({ channelId: this.channelId, endpoint: NAT_HPAI }));
     }
     this.shutdown(reason, error);
   }
@@ -551,8 +553,8 @@ export class KnxTunnelClient {
     this.disconnectTimer = null;
     this.failPending(error ?? new KnxTunnelError("closed", "tunnel closed"));
     for (const c of [...this.confirmations]) c.settle("not_confirmed");
-    this.socket?.close();
-    this.socket = null;
+    this.link.close();
+    this.linkOpen = false;
     this.resolveClosed();
     const ev: ClosedEvent = error ? { reason, error } : { reason };
     this.notify(this.closedListeners, ev);
@@ -582,10 +584,10 @@ export class KnxTunnelClient {
     this.shutdown("socket_error", new KnxTunnelError("socket_error", `UDP socket error: ${err.message}`));
   }
 
-  private transmit(frame: Buffer, to: RemoteInfo): void {
-    if (!this.socket) return;
+  private transmit(frame: Buffer): void {
+    if (!this.linkOpen) return;
     this.stats.framesSent++;
-    this.socket.send(frame, to.port, to.address);
+    this.link.send(frame);
   }
 
   /** Calls every subscriber; one throwing never affects the others or the session. */
