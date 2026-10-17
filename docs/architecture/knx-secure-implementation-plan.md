@@ -4,6 +4,8 @@
 |---|---|---|---|
 | S0 | Spec audit, matrix, architecture, threat model | — | **done** (spec acquisition itself BLOCKED) |
 | S1 | Secret/KeyStore/audit, fail-closed policy, undecoded-APDU accounting, simulator isolation | — | **done** |
+| S1b | Key-store hardening: unlock providers (TPM seam), lock + generation, transactional import infra, feature flags | — | **done** (TPM unvalidated; rollback resistance not provided) |
+| S1c | Concrete TPM 2.0 driver + provisioning/recovery on the real hub hardware | target hardware + decision on recovery wrapper | not started, BLOCKED-HW |
 | S2 | Acquire normative documents + any official vectors; fill "Spec ref" column; resolve open questions | licence/portal access | **BLOCKED** |
 | S3 | Keyring parser + transactional import (KR-xx) with independently authored negative tests | S2 | not started |
 | S4 | IP Secure framing + crypto primitives against official vectors (IPS-01/03/04) | S2 | not started |

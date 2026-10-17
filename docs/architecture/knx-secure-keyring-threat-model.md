@@ -1,6 +1,7 @@
 # KNX Keyring Import & Secret Storage — Threat Model
 
-Implemented: `security/secret.ts`, `security/keystore.ts`. Keyring parsing/decryption is BLOCKED-SPEC.
+Implemented: `security/secret.ts`, `keystore.ts`, `unlock.ts`, `import-activation.ts`. Keyring parsing/decryption is BLOCKED-SPEC.
+Revision 2 (2026-10-17): unlock providers, generation/lock concurrency control, transactional import.
 
 ## 1. Assets
 Keyring-derived interface credentials; group-address keys; device/tool keys; the keyring password; the key-store
@@ -11,12 +12,13 @@ passphrase; audit trail integrity.
 |---|---|---|---|
 | T1 | Theft of disk, backup or support bundle | AES-256-GCM container, scrypt (N=2^15 default), names encrypted, no plaintext on disk | Offline guessing of a weak passphrase; ≥12-byte minimum only — choose a strong one |
 | T2 | Local unprivileged user reads the file | 0600 file / 0700 dir; refuses to open if group/other-readable | Root and the service account can read it |
-| T3 | Tampering / downgrade of the container | GCM tag over payload; header (KDF params, salt) bound as AAD; indistinguishable failure | Whole-file rollback to an older valid copy is **not** detected (no monotonic version) |
+| T3 | Tampering / downgrade of the container | GCM tag over payload; header (version, KDF params, salt, unlock mode, generation) bound as AAD; indistinguishable failure; mode downgrade impossible | **Whole-file rollback to an older valid copy is NOT detected** — `keystore-hardening.test.ts` asserts this limitation on purpose. The generation counter detects concurrent writers, not an attacker or a restore. |
 | T4 | Secret leaks via logs, errors, JSON, debugger output | `Secret` redacts everywhere; `redactSecrets` for foreign text; tests assert it | Callers who `use()` a buffer and print it; libraries that copy buffers |
-| T5 | Crash mid-write corrupts store | temp file + fsync + rename; in-memory rollback on failure | Power loss between rename and directory fsync on some filesystems |
+| T5 | Crash mid-write corrupts store | temp + fsync + rename under an exclusive lock; fault-injection tests for failed rename and crash after temp write; orphan temp files cleaned | Directory fsync after rename not performed; power loss there is untested |
+| T11 | Two writers race | lock file (fail-fast `store_busy`), generation check (`stale_store`), stale lock reclaimed only for same-host dead pid | Local filesystem only; NFS/multi-host unsafe; lock is advisory |
 | T6 | Malicious/malformed keyring file import | Must be parsed in isolation and activated transactionally (§6) | Parser not written (spec) |
 | T7 | Unauthorised config change | Value-free audit events with actor; operation requires unlocked store | Audit sink is caller-supplied; tamper-evidence of the audit log itself is not provided |
-| T8 | Memory disclosure of live keys | `wipe()`/`close()` zero owned buffers | JS cannot guarantee zeroisation, mlock, or exclude swap/core dumps |
+| T8 | Memory disclosure of live keys | `wipe()`/`close()` zero buffers the module owns; tests prove: copies are independent, use-after-wipe throws, source buffers are copied | **Not testable/guaranteed in a managed runtime:** V8 may have copied strings/buffers (base64/JSON staging in `persist`, scrypt internals, GC moves), swap and core dumps are out of reach. Treat wiping as hygiene, not a guarantee. |
 | T9 | Key reuse/replay after restore from backup | Counter persistence design (IPS-09) | Not implemented |
 | T10 | Cloud dependency / exfiltration | None: no network code in these modules | — |
 
@@ -24,10 +26,24 @@ passphrase; audit trail integrity.
 No TPM/HSM/secure-enclave binding; no protection against a compromised running hub process or root; no hardware-backed
 unlock; no key escrow. **If production requires hardware-backed protection, production readiness stays blocked.**
 
-## 4. Unlock strategy (decision needed from the product owner)
-Options: (a) operator passphrase entered at start-up (strongest, hands-on); (b) key file on a separate protected mount
-(unattended boot, protects only against theft of the main disk); (c) TPM-sealed key (needs platform work, not built).
-No default is shipped; the store refuses to run without an explicit secret.
+## 4. Key-unlock design (decided; production target TPM 2.0, UNVALIDATED)
+Providers are pluggable (`unlock.ts`); the mode is authenticated in the store header, so a store opens ONLY through the mode
+that created it and never retries with a weaker one (tested, mutation-verified).
+
+| Mode | Status | Protects against | Does not protect against |
+|---|---|---|---|
+| `tpm` (production target) | **seam only** — no concrete driver, **never run on a TPM** | offline theft of disk/backup; unattended boot | root / compromised running process |
+| `passphrase` | implemented | offline theft | weak passphrase; needs an operator at boot |
+| `external_key_file` | implemented, **transitional** | theft of the main disk only if the mount is physically separate | anyone with both; a mount left attached |
+
+Fail-closed rules: TPM selected but unavailable/unseal fails → error, nothing else is tried. No default secret exists.
+
+### TPM operational design (to be built and validated on the real hub; none of this is tested)
+- **Provisioning:** generate a random 256-bit key-encryption secret, seal it to the TPM under a PCR policy, store only the sealed blob; create the store with it. Record the PCR set chosen and why.
+- **Firmware/boot change:** PCR drift makes unseal fail (`tpm_unseal_failed`). Recovery = operator-passphrase **recovery wrapper** (a second, separately stored wrapping of the same secret, created at provisioning) or ETS keyring re-import. The recovery wrapper is an escrow and must itself be protected and documented — design not yet written.
+- **Device replacement / TPM loss:** sealed key is unrecoverable by design; restore from encrypted backup + recovery wrapper, or re-import keyring from ETS and re-provision.
+- **Rotation:** rotate the sealed secret by creating a new store generation under a new seal and re-encrypting; in-place passphrase rotation exists only for passphrase mode.
+- **Rollback:** a TPM NV counter could provide rollback detection (S-13); not designed or built.
 
 ## 5. Operating-system assumptions
 POSIX permissions honoured (Linux hub). On Windows the permission check is skipped by design and the store must live in a

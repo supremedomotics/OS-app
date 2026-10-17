@@ -93,7 +93,7 @@ describe("KeyStore at-rest protection", () => {
     expect(() => KeyStore.open(opts(), PASS())).toThrow(expect.objectContaining({ code: "unsafe_permissions" }));
   });
   it("has no default passphrase and will not overwrite an existing store", () => {
-    expect(() => KeyStore.create(opts(), new Secret(Buffer.from("short")))).toThrow(expect.objectContaining({ code: "invalid_input" }));
+    expect(() => KeyStore.create(opts(), new Secret(Buffer.from("short")))).toThrow(expect.objectContaining({ code: "passphrase_invalid" }));
     KeyStore.create(opts(), PASS()).close();
     expect(() => KeyStore.create(opts(), PASS())).toThrow(expect.objectContaining({ code: "exists" }));
   });
@@ -132,15 +132,20 @@ describe("KeyStore at-rest protection", () => {
     const blob = JSON.stringify(events);
     for (const secret of [KEY_A.toString("hex"), KEY_A.toString("base64"), "correct horse", "another long"]) expect(blob).not.toContain(secret);
   });
-  it.skipIf(process.getuid?.() === 0)("leaves the previous store intact when a write fails", () => {
-    const ks = KeyStore.create(opts(), PASS());
+  it("leaves the previous store intact when a write fails (deterministic fault injection; runs as root too)", () => {
+    let fail = false;
+    const o = opts({ faultInjection: { beforeRename: () => { if (fail) throw new Error("injected disk failure"); } } });
+    const ks = KeyStore.create(o, PASS());
     ks.put("a", new Secret(KEY_A));
-    const before = readFileSync(opts().path, "utf8");
-    chmodSync(join(dir, "keys"), 0o500); // make the directory unwritable so the temp file cannot be created
-    expect(() => ks.put("b", new Secret(KEY_A))).toThrow();
-    chmodSync(join(dir, "keys"), 0o700);
-    expect(ks.names()).toEqual(["a"]); // in-memory state rolled back
-    expect(readFileSync(opts().path, "utf8")).toBe(before);
+    const before = readFileSync(o.path, "utf8");
+    fail = true;
+    expect(() => ks.put("b", new Secret(KEY_A))).toThrow(/injected/);
+    fail = false;
+    expect(ks.names()).toEqual(["a"]); // in-memory state unchanged
+    expect(readFileSync(o.path, "utf8")).toBe(before); // on-disk bytes unchanged
+    expect(readdirSync(join(dir, "keys"))).toEqual(["store.json"]); // temp + lock cleaned up
+    ks.put("b", new Secret(KEY_A)); // and the store is still usable
+    expect(ks.names()).toEqual(["a", "b"]);
     ks.close();
   });
 });

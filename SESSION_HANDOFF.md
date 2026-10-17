@@ -4,6 +4,23 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: KNX Secure research attempt + key-store hardening (Secure STILL NOT implemented)
+
+**Research:** the KNX Specifications Navigator GPT and every `support.knx.org` page are unreachable from the sandbox
+(`ENOTFOUND`); **no question was put to the GPT and no KNX document was read.** All protocol rows stay BLOCKED-SPEC in
+`knx-secure-requirements-matrix.md` (now with source-class/obtained/impl/tests/HW columns, a research log, the supplied AN
+list as unverified leads, and ten questions to ask the Navigator). No crypto written.
+**Built (spec-independent):** `unlock.ts` (passphrase / external key file [transitional] / TPM *seam* — fails closed, mode
+authenticated in the store header so no weaker fallback), key store v2 (generation counter + lock file → `stale_store` /
+`store_busy`; fault-injected atomic-write tests, now running as root), `import-activation.ts` (validate → confirm diff →
+atomic activate → audit; format-agnostic), `native-flags.ts` (`SUPREME_KNX_NATIVE[_SECURE]`, fail-closed). New docs:
+`knx-removal-gates.md`; threat model gained TPM provisioning/recovery design, concurrency, wipe limits.
+**Results:** native 188 pass/0 fail/0 skip; KNX regression 630/630; typecheck+build clean; monorepo-wide checks NOT run.
+Mutation-checked the three key guards. knxultimate + direct deps are MIT. **Not provided / not validated:** rollback
+resistance (asserted by a test), any TPM behaviour (no TPM here), Windows, NFS, dir-fsync. TPM recovery-wrapper design
+unwritten. **Need from you:** documents (licensed) or a reachable Navigator session with citations; secure hardware;
+target hub hardware for TPM validation. Next: S2 (spec acquisition) — nothing protocol-side can proceed before it.
+
 ## Session: KNX Secure — specification audit, secret handling foundation (Secure itself NOT implemented)
 
 **KNX IP Secure and KNX Data Secure are NOT implemented.** The normative specs could not be obtained (knx.org

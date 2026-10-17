@@ -1,46 +1,49 @@
 # KNX Secure — Security Test Report
 
-Environment: Linux sandbox, Node 22, run as **root**, simulator + loopback only. **No real KNX hardware, no secure
-device, no official conformance vectors.** `PASSED` means an automated test in this repo passed; it is not hardware evidence.
+2026-10-17 · Linux sandbox, Node 22, **root**, simulator + loopback only. **No KNX hardware, no TPM, no secure device, no
+official conformance vectors, no KNX specification.** `PASSED` = an automated test in this repo passed; it is not
+interoperability or hardware evidence.
 
-Native suite: 165 passed, 0 failed, 1 skipped (`src/knx/native`). Full KNX regression (`src/knx`, `knx-driver`,
-`knx-discovery`, `knx-codec`): all pass (see handoff for the final run). Typecheck and package build clean.
+## Actual results
+| Run | Passed | Failed | Skipped |
+|---|---|---|---|
+| `src/knx/native` | **188** | 0 | 0 |
+| KNX regression (`src/knx`, `knx-driver`, `knx-discovery`, `knx-codec`) | **630** | 0 | 0 |
+| `tsc --noEmit` / `pnpm build` (`@supreme/protocols`) | clean | — | — |
+| Full-monorepo repository checks | **not run** | — | — |
 
-## Passed (spec-independent controls)
-| Case | Test |
-|---|---|
-| Secrets redacted in string/JSON/template/inspect/nested; hex/base64 forms scrubbed from foreign text | `security.test.ts` › Secret |
-| Wipe zeroes owned buffer; use-after-wipe rejected | same |
-| Store contains no plaintext key, no secret names; round-trip | KeyStore |
-| File 0600 / dir 0700; no stray temp file | KeyStore |
-| Wrong passphrase ≡ tampered ct/tag/iv/salt/KDF-param (one identical error) | KeyStore |
-| Refuses group/other-readable store; no default passphrase; no overwrite | KeyStore |
-| Passphrase rotation; invalid name/size; durable delete | KeyStore |
-| Audit trail complete and value-free (no key, no passphrase) | KeyStore |
-| Secure-required client cannot be constructed; zero sockets opened (no downgrade) | policy |
-| Non-plain-APCI group telegram withheld and counted, session stays up | policy |
-| No production module imports the simulator; simulator has no route to real addresses | isolation |
-| Standard tunnelling, framing, cEMI, DPT, UDP loopback, leak gates (146 pre-existing native tests) | unchanged |
+The previously skipped write-failure test now runs under root using deterministic fault injection; it is no longer skipped.
+`dpt-differential.test.ts` (39) is temporary migration evidence and is not security evidence.
 
-## Skipped
-| Case | Why |
-|---|---|
-| Failed store write leaves previous store intact | Needs a non-root user (root ignores directory permissions). The code path is written but **unverified here**; run in CI as non-root. |
+## Passed
+Secret redaction (string/JSON/template/inspect/nested/hex/base64) · wipe & copy independence & use-after-close · encrypted
+store: no plaintext/names, 0600/0700, no temp/lock left · wrong secret ≡ tampering ≡ identical error; tamper of ct/tag/iv/
+salt/KDF params/**generation**/**unlock mode** fails · unsafe permissions refused · no default/short passphrase · rotation ·
+audit completeness and value-freeness · failed rename and crash-after-temp-write leave the committed store byte-identical and
+usable · orphan temp files harmless and cleaned · truncated/empty/binary/wrong-version files give typed errors · concurrent
+handle cannot clobber a newer write (`stale_store`); live lock → `store_busy`; lock reclaimed only for same-host dead pid,
+never for foreign host or garbage · unlock mode binding both directions · TPM provider with no driver/unavailable/unseal
+failure/throwing driver fails closed with no detail leak and no file created · passphrase store refuses TPM provider · external
+key file perms/symlink/size/missing · import: validator failure leaves store byte-identical, confirmation required, atomic
+activation with correct diff, counts-only audit, failed write keeps previous set, empty/invalid name/invalid size/crashing
+validator rejected without leaking its exception text · feature flags fail closed · secure-required client cannot be
+constructed (0 sockets) · non-plain group APDU withheld and counted · simulator isolation.
+**Mutation check:** removing the generation check, the mode check, or the AAD binding each makes ≥1 test fail (verified by hand).
 
-## Blocked — cannot be tested (normative specification not obtained)
-Secure session establishment/teardown · authenticated+encrypted telegram exchange · invalid credentials / corrupted
-authentication data · modified ciphertext / integrity failure · replay, duplicate, out-of-order, invalid sequence ·
-session expiry, counter boundaries, reconnect recovery · keyring missing/malformed/mismatched · mixed secure/plain
-devices (beyond the fail-closed policy) · official conformance vectors · secure transport over real UDP.
-Each maps to matrix rows IPS-xx / DS-xx / KR-xx.
+## Passed but only with a FAKE
+TPM provider behaviour (3 tests) uses an in-test fake driver. It proves the fail-closed logic, **not** that any TPM works.
 
-## Blocked — hardware
-Interop with a real KNX IP Secure interface/router · Data Secure against real devices and captures · secure routing.
+## Known limitations asserted by tests (not defects fixed)
+Stale-copy restore is accepted (no rollback resistance).
 
-## Not yet tested (feasible now, not written)
-Property/fuzz tests of a future keyring parser (no parser) · key-store behaviour on Windows · key-store concurrent access
-from two processes (no file lock implemented — **known gap**) · rollback/restore-old-store detection (known residual T3).
+## Blocked — spec / hardware (all untested)
+Every IPS-xx, DS-xx, KR-01..04 row · official vectors · replay/out-of-order/sequence/counter-exhaustion for secure traffic ·
+valid secure session and telegram exchange · secure reconnect · mixed secure/plain devices · real-UDP secure transport ·
+TPM on target hardware · IP Secure interface / Data Secure device interoperability · v2 Core/Tunnelling behaviour.
+
+## Not yet tested (feasible, not written)
+Windows behaviour · cross-process (not just cross-handle) lock contention · NFS · directory-fsync power-loss · property tests
+for a keyring parser (none exists) · 24 h soak.
 
 ## Verdict
-**KNX IP Secure: NOT IMPLEMENTED. KNX Data Secure: NOT IMPLEMENTED.** What exists is a safe foundation that guarantees
-failure rather than insecurity. Production must not claim KNX Secure support.
+**KNX IP Secure: NOT IMPLEMENTED. KNX Data Secure: NOT IMPLEMENTED. Native driver: NOT production-ready.**
