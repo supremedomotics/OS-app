@@ -22,3 +22,7 @@ the legacy driver). Note: the legacy path's own handling of secure installations
 
 Status update 2026-10-17: IP Secure client layers (CCM, key derivation, frame codecs, session client, stream deframer) are implemented and simulator/vector-verified;
 see requirements matrix §6. Real TCP, in-session tunnelling, routing, Data Secure and keyring remain not started/BLOCKED.
+
+Status update 2026-10-17 (blocker milestone): S2 remains BLOCKED. Blockers B1–B9 are enumerated in `knx-secure-blocker-matrix.md`; the acquisition document lists exact
+titles and questions; `knx-secure-tunnelling-architecture.md` stages the secure-tunnelling work as T0 (done) … T6. S5's "secure tunnelling in the simulator" splits into
+T2 (N-only stream rules, simulator) and T3/T4 (needs Core v2 + Overview). No source changed in this milestone.

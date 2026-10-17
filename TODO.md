@@ -18,6 +18,9 @@ See `docs/architecture/knx-clean-room-parity-matrix.md` (stages, removal gates, 
 - **Unblock KNX Secure:** follow `docs/architecture/knx-secure-spec-acquisition.md` (inventory MyKNX/membership; request docs/revisions/conformance material; ETS licence; secure bench hardware).
 - Key store: TPM driver + recovery wrapper design (BLOCKED-HW); rollback resistance via trusted counter; cross-process lock test.
 - Removal gates: see `docs/architecture/knx-removal-gates.md` (all open/partial).
+- **KNX IP Secure — blockers B1–B9 (see `docs/architecture/knx-secure-blocker-matrix.md`):** send the 11 questions in `knx-secure-spec-acquisition.md` (addendum 2026-10-17) to the KNX Association; obtain
+  Core v2 (03_08_02), Overview (03_08_01, §5.8 constants), AN183, keyring format. Owner decisions pending: non-ASCII password policy (B6), pre-auth close (B7), outer-frame cap 4118 (B8),
+  client serial source (B9). Then T1 `TunnelLink` refactor → T2 N-only stream rules in simulator → T3/T4 (needs Core v2) per `knx-secure-tunnelling-architecture.md`. D5 promotion conditions: blocker matrix §3.
 - **KNX IP Secure:** client session, codecs, CCM, real TCP socket done (simulator/vector/loopback verified; review in `knx-ip-secure-security-review.md`). Next (BLOCKED-SPEC: Core v2 + Overview): tunnelling inside the session; then discovery/routing; hardware interop.
 - **KNX Secure (mandatory) — Data Secure/keyring BLOCKED-SPEC/HW:** obtain normative docs + vectors; then keyring parser, IP Secure, Data Secure,
   routing; hardware interop; security review. Plan: `docs/architecture/knx-secure-implementation-plan.md`. Also: key-store file

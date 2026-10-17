@@ -4,6 +4,22 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: KNX IP Secure — specification blocker closure + secure-tunnelling architecture (DOCS ONLY; no code, no hardware, NOT production)
+
+Delivered: `docs/architecture/knx-secure-blocker-matrix.md` (B1 Core v2/Overview, B2 AN183, B3 TCP HPAI, B4 heartbeat/liveness, B5 E_CONNECTION_ID/disconnect, B6 password
+encoding, B7 pre-auth close, B8 frame/partial-frame limits, B9 client serial number — each split into N/T/I/U known-vs-unknown, current code, risk, needed document; plus the D5
+review) and `knx-secure-tunnelling-architecture.md` (gap analysis per transport/addressing/ACK/retry/heartbeat/teardown, `TunnelLink` + `TunnelRules` proposal where unverified
+rules are executable "UNVERIFIED" markers that a real stream factory refuses; stages T0–T6). Acquisition doc gained exact titles/revisions and 11 questions for the KNX Association.
+Security review §8 (F10–F14), requirements matrix §6a/IPS-25, test report addendum 3 and the plan were updated.
+Key findings from reading the code: `decodeHpai` throws on non-UDP HPAI and `NAT_HPAI` is UDP (a TCP tunnel needs HPAI work first; TSSK 2.5.21 says a UDP-HPAI CONNECT over TCP is
+silently ignored); secure KEEPALIVE is already automatic (30 s); a software client has no assigned KNX serial (B9); TSSK names Overview v01.04.02 §5.8 for timeout constants.
+**D5 stays an implementation decision (I)** — spec silent, no TSSK case; promotion conditions are in the blocker matrix §3.
+Decisions NOT applied (need owner/KNX input): reject non-ASCII passwords until B6 is answered; pre-auth local close = TCP close only (B7); tighten outer-frame cap to 4118 (B8); T1 `TunnelLink`
+refactor deliberately deferred so the working classic client is not touched.
+Tests run (no code change): secure 87 pass with local vectors / 65 + 22 skipped without; tcp-socket 24; `src/knx` regression 744 / 722 + 22 skipped; tsc clean; build not run. Vector mutation
+(4 values altered) → 5 failures, copy deleted. Vectors remain outside Git (`knx-licensed/` ignored; none tracked). `knxultimate`, production registration, package.json, lockfile, flags, policy.ts unchanged.
+Next: obtain Core v2 + Overview + AN183 statement (answers to the 11 questions); then T1/T2; then T3/T4 in the simulator; hardware bench list in the architecture doc §6. No PR opened.
+
 ## Session: KNX IP Secure — security review gate, review fixes, real TCP socket (loopback-verified; NOT hardware-tested, NOT production)
 
 Review: `docs/architecture/knx-ip-secure-security-review.md`. Found+fixed F1 (reflected client frame / shared nonce domain → D5: drop own serial, refuse zero serial)

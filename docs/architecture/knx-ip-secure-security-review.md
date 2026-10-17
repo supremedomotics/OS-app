@@ -103,3 +103,22 @@ password encoding (F8) and of the pre-authentication STATUS_CLOSE behaviour (F6)
 A KNX IP Secure interface with known Device Authentication Code / user password (or its FDSK), a closed lab network, the unlocked
 key store, Core v2 + Overview to complete the tunnelling over TCP, a packet capture setup (secrets scrubbed, never committed), and a
 rollback runbook. Until then every statement above is a simulator/vector statement.
+
+## 8. Addendum — blocker review (2026-10-17, base `d5b78bf`; no code changed)
+
+Full detail: `knx-secure-blocker-matrix.md` (B1–B9, D5 review) and `knx-secure-tunnelling-architecture.md`.
+
+New findings from reading the *existing* tunnelling client and the specification/test text against §5:
+
+| # | Sev | Finding | Status |
+|---|---|---|---|
+| F10 | Info (blocks integration) | `decodeHpai()` throws on any non-UDP HPAI and `NAT_HPAI` is UDP route-back (01h); a TCP-carried CONNECT_RESPONSE/DISCONNECT/CONNECTIONSTATE would be rejected as malformed, and per TSSK 2.5.21 a server **silently ignores** a UDP-HPAI CONNECT over TCP (a 10 s connect timeout, not an error) | BLOCKED-SPEC (B3); documented, not changed |
+| F11 | Info | `StatusCode` values (e.g. CONNECTION_ID = 0x21) cite "Core spec §7.8"; **no supplied document states them** | Unverified (B1/B5); questions drafted |
+| F12 | Info | Deframer closes on length > 8192; derived bound for a SECURE_WRAPPER is 4118 octets (CCM payload ≤ 255 blocks, IPS §2.2.1.3.2 note) so no valid wrapper is rejected; TSSK 2.5.8 shows servers *skip* oversize frames — our stricter close is client-side decision I | I; unchanged (B8) |
+| F13 | Info | No client-side partial-frame receive timeout (T 2.5.7/2.5.18 describe it for servers); stalled partial frame after authentication is undetected by the client | = F5, BLOCKED-SPEC (B4/B8) |
+| F14 | Info / U | The client must put a KNX serial number into every wrapper (nonce input). A software client has none assigned; fabricating one would undermine nonce uniqueness and D5 | BLOCKED (B9); option stays mandatory with no default |
+| F5/F6/F8 | – | Re-examined: still unresolved; candidate decisions recorded in B6/B7/B8 but **not applied** | open |
+
+**D5** was re-reviewed against IPS §2.2.1.3.1–§2.2.3.3 and the TSSK cases: the specification is silent on unicast reflection, its nonce design presupposes
+distinct sender serials, and no TSSK case exercises reflection. It remains classified **I (implementation decision), not spec text, not conformance-tested**;
+conditions for promoting it are in blocker matrix §3.

@@ -81,3 +81,21 @@ Commit `93777b3`. Details: `knx-ip-secure-security-review.md`.
 New: 4 review regressions in `ip-session.test.ts` (reflection ×2, zero serial, fault→closed) + 24 loopback TCP tests. Verification of the
 vectors: all 53 hex values are present in the extracted spec text; none of the 35 long values occurs in the tree or any commit; tampering
 with three vectors made 4 tests fail. Hardware: none. Conformance tests executed: none.
+
+## Addendum 3 — blocker-closure milestone (2026-10-17)
+Base `d5b78bf`, **no source code changed** (documentation only), so no new behaviour is tested; the suites were re-run to confirm the baseline and the
+vector-mutation property. Linux sandbox, loopback only, no hardware.
+
+| Run | Passed | Failed | Skipped |
+|---|---|---|---|
+| `src/knx/native/secure` **with** licensed vectors (`KNX_SECURE_VECTORS`, file outside Git) | **87** | 0 | 0 |
+| `src/knx/native/secure` **without** vectors | **65** | 0 | **22** (skipped, never passed) |
+| `src/knx/native/tcp-socket.test.ts` (real loopback TCP) | **24** | 0 | 0 |
+| `src/knx` + `knx-driver` + `knx-discovery` + `knx-codec` regression **with** vectors | **744** | 0 | 0 |
+| same **without** vectors | **722** | 0 | **22** |
+| `tsc -p tsconfig.json --noEmit` (`@supreme/protocols`) | clean | – | – |
+| `build` | **not run** (no code changed) | – | – |
+| **Mutation:** local vector JSON copy with 4 expected values altered (`a2_mac`, `a2_session_key`, `a3_auth_mac`, `a3_wrap_key`) | – | **5 tests failed** (ccm, ip-frames, ip-keys vector files); copy deleted | – |
+
+Git hygiene re-checked: `git ls-files` has no PDF/keyring/vector file; `knx-licensed/` is ignored. Conformance executed: none. Hardware: none.
+Not tested (blocked): everything in `knx-secure-blocker-matrix.md` B1–B9 — tunnelling in the session, TCP HPAI, heartbeat on TCP, E_CONNECTION_ID, pre-authentication close.

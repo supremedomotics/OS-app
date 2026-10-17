@@ -114,6 +114,17 @@ property/cross-check test · **S** = simulator test (our own simulated gateway �
 
 No row has HW evidence. Passing self-authored simulator tests is not interoperability with any real KNX IP Secure device.
 
+## 6a. Blocker cross-reference (2026-10-17)
+IPS-14/15/22/23/24 and the rows they depend on are tracked precisely in `knx-secure-blocker-matrix.md` (B1 Core v2/Overview · B2 AN183 · B3 TCP HPAI ·
+B4 heartbeat/liveness · B5 E_CONNECTION_ID/disconnect · B6 password encoding · B7 pre-auth close · B8 frame limits · B9 client serial). IPS-23 (no ACK,
+ignore ACK, no sequence evaluation on TCP) stays **N**; IPS-24 and IPS-22 stay **BLOCKED**. The proposed structure for IPS-24 is
+`knx-secure-tunnelling-architecture.md`. New row:
+
+| ID | Requirement | Source | Status | Blocker |
+|---|---|---|---|---|
+| IPS-25 | Client's KNX serial number in SECURE_WRAPPER security information (sender's serial; nonce input) | C: IPS §2.2.1.3.1/§2.2.1.3.2 | option mandatory, no default; allocation rule **U** | B9 |
+| D5 | Own-serial reflection drop | **I** (not in text) | implemented, simulator-tested, not conformance-tested | review conditions in blocker matrix §3 |
+
 ## 7. Still-missing documents (ordered by what they unblock)
 
 | Priority | Document | Unblocks |
