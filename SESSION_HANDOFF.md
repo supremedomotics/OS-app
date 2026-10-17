@@ -4,6 +4,18 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: KNX Secure research log updated with project-supplied official-page evidence (docs only, no code)
+
+Re-tested: `support.knx.org` (4 pages), `chatgpt.com` Navigator, `knx.org`, `my.knx.org` — all unreachable here (no DNS); **this tool
+fetched none of them**. The official AN mapping (Data Secure: 158, 163, 177, 170, 193, 194; IP Secure: 159, 183, 185, 184) and the
+"specs are for KNX members; Navigator is an aid" statement are recorded as evidence class **P** (supplied by the project, not
+fetched). The earlier "mapping conflicts/unconfirmed" note was wrong and is corrected; AN 183/184/185 are IP Secure dependencies,
+so the classic tunnelling in `native/` must be re-checked against them. Titles of AN 163/177/170/193/194 and ALL revisions are
+unknown and not invented. Normative text and conformance vectors stay BLOCKED (nothing is class C). New:
+`docs/architecture/knx-secure-spec-acquisition.md` (shortest legitimate route: check existing MyKNX/membership/ETS login → ask
+the KNX Association the listed questions → membership; ETS licence + secure hardware in parallel). **Needs a human:** inventory of
+existing MyKNX/membership. No code or tests changed; last verified suite results are those of the previous session.
+
 ## Session: KNX Secure research attempt + key-store hardening (Secure STILL NOT implemented)
 
 **Research:** the KNX Specifications Navigator GPT and every `support.knx.org` page are unreachable from the sandbox

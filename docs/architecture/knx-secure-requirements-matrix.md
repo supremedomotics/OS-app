@@ -1,27 +1,54 @@
 # KNX Secure — Specification & Requirements Traceability Matrix
 
-Last updated: 2026-10-17. **Zero normative requirements are verified.** No KNX specification document has been obtained.
+Last updated: 2026-10-17 (rev 2: official page content supplied by the project). **Zero normative requirements are verified.** No KNX specification document has been obtained or read by this project's tooling.
 
-Evidence classes used in the "Source" column: **C** confirmed from an authorized document actually read ·
-**S** secondary-source interpretation · **U** unresolved question · **D** SupremeOS implementation decision (not a KNX requirement).
-Everything protocol-related below is **U** until a document is read; nothing is **C** yet.
+Evidence classes used in the "Source" column: **C** confirmed from an authorized normative document actually read ·
+**P** supplied by the project as verified content of an official KNX page (reported by a person, NOT fetched by this tool) ·
+**S** secondary-source interpretation · **U** unresolved · **D** SupremeOS implementation decision (not a KNX requirement).
+`P` establishes *which documents apply*; it says nothing about their normative content. Every protocol requirement is still **U**; nothing is **C**.
 
-## 0. Research log (what was actually attempted)
+## 0. Research log
 
-| Source | Attempt | Result |
+### 0.1 Accessibility from this environment (re-tested 2026-10-17)
+
+| Source | Result here | Basis |
 |---|---|---|
-| KNX Specifications Navigator (ChatGPT GPT) | `WebFetch` of the GPT URL | **Not accessible** — `chatgpt.com` does not resolve from the sandbox (`ENOTFOUND`); a hosted GPT would also need an authenticated session no tool here provides. **No question was put to it. Nothing in this repo is attributed to it.** |
-| support.knx.org — "Updating stack for KNX Secure" | `WebFetch` (2 sessions) | Not accessible (`ENOTFOUND`) |
-| support.knx.org — "KNX IP Secure", "KNX Data Secure", "Keyring File Format" | `WebFetch` | Not accessible (`ENOTFOUND`) |
-| knx.org / web search | search snippets only | Snippets conflicted on which application note covers IP vs Data Secure. They are leads, not evidence. |
-| Local repository | grep of docs/ and source | Contains no KNX specification text. |
+| support.knx.org — Updating stack for KNX Secure | **Not reachable** | `WebFetch`: `ENOTFOUND`; `getent hosts` no DNS; `curl` via proxy → 000 |
+| support.knx.org — KNX Specifications | **Not reachable** | same |
+| support.knx.org — KNX Security overview | **Not reachable** | same |
+| support.knx.org — Keyring File Format | **Not reachable** | same |
+| chatgpt.com — KNX Specifications Navigator | **Not reachable** | `ENOTFOUND`. **No question has been put to it.** |
+| knx.org, my.knx.org | **Not reachable** | no DNS |
 
-### Reference list supplied by the project (leads only — titles/revisions/applicability UNVERIFIED)
-AN 158 "Data Security" · AN 159 "IP Security" · AN 163, 177, 170, 193, 194 (Data Secure-related, per KNX Association) ·
-AN 183 IP System Broadcast · AN 184 IP Core v2 · AN 185 IP Tunneling v2. Whether this list is complete or correctly
-mapped is itself **U**. Note the brief's mapping (158 = Data, 159 = IP) disagrees with an earlier search snippet; neither is
-confirmed. The tunnelling work already in `native/` follows classic KNXnet/IP; whether v2 Core/Tunnelling (AN 184/185) change
-that behaviour is **U** and must be checked before any hardware validation.
+**This tool fetched none of these pages.** Everything in 0.2 is content supplied by the project and recorded as evidence class **P**.
+
+### 0.2 Evidence supplied by the project (class P — not independently fetched here)
+
+| Item | Supplied statement | Where it is used |
+|---|---|---|
+| Official AN ↔ feature mapping | The KNX "stack requirements" page lists **Data Secure:** AN 158, 163, 177, 170, 193, 194. **IP Secure:** AN 159, 183, 185, 184. | document set in 0.3; corrects the earlier unconfirmed/conflicting mapping |
+| Specifications page | The Navigator is an **aid, not an authoritative source**; the full specifications are available **to KNX members**. | rule below; acquisition route |
+| Pages named | Updating stack for KNX Secure · KNX Specifications · KNX Security overview · Keyring File Format · Navigator | research leads |
+
+**Corrections to earlier revisions of this repo's docs:** the previous revision said the mapping "AN 158 = Data, AN 159 = IP" conflicted with a search snippet and was unconfirmed. Per the supplied official mapping the project's mapping is **correct**; the earlier snippet was wrong or garbled. Also corrected: AN 183/184/185 are **IP Secure** dependencies (not generic IP documents), so classic-tunnelling assumptions in `native/` must be re-checked against them (see IPS-11).
+
+**Navigator rule (from the supplied Specifications page):** Navigator answers are leads only. A requirement becomes **C** only when read in the member-licensed specification text itself, with document, revision and section recorded.
+
+### 0.3 Document register — what is needed (class P for the *list*; nothing obtained)
+
+| Document | Role | Title known? | Revision needed | Status |
+|---|---|---|---|---|
+| AN 158 | Data Secure (core) | "Data Security" (as supplied earlier; unverified on page) | exact current revision — **unknown** | BLOCKED |
+| AN 163, 177, 170, 193, 194 | Data Secure additional requirements | **titles unknown — not recorded** | **unknown** | BLOCKED |
+| AN 159 | IP Secure (core) | "IP Security" (as supplied; unverified on page) | **unknown** | BLOCKED |
+| AN 183 | IP Secure dependency | "IP System Broadcast" (as supplied; unverified) | **unknown** | BLOCKED |
+| AN 184 | IP Secure dependency | "IP Core v2" (as supplied; unverified) | **unknown** | BLOCKED |
+| AN 185 | IP Secure dependency | "IP Tunneling v2" (as supplied; unverified) | **unknown** | BLOCKED |
+| Keyring file format description | `.knxkeys` structure, integrity, encryption | page exists (P); content unseen | current revision **unknown** | BLOCKED |
+| KNX Standard volumes the ANs reference (e.g. cEMI, application layer, KNXnet/IP Core/Tunnelling/Routing) | base protocol for the above | **not enumerated** — to be read off AN 158/159 normative references | **unknown** | BLOCKED |
+| Conformance / test specifications and vectors for Secure | lawful test vectors | **existence and access terms unknown** | **unknown** | BLOCKED |
+
+Open: whether ANs 158/159 are *superseded or merged* into a later Standard release (revision history unseen); the "Updating stack for KNX Secure" page presumably lists the minimum revisions — **U**, read it once reachable.
 
 ### Questions to put to the Navigator once reachable (and verify against documents)
 Q1 exact documents/sections/revisions for IP Secure and Data Secure and their dependencies · Q2 secure session
@@ -32,7 +59,7 @@ timer sync · Q8 reconnect/session-recovery rules · Q9 conformance vectors avai
 
 ## 1. Matrix
 
-Columns: **Source** (evidence class + exact doc/section/revision when C) · **Obtained?** · **Impl** · **Tests** · **HW** · **Uncertainty / blocker**.
+Columns: **Source** (evidence class + document; section/revision only when C) · **Obtained?** · **Impl** · **Tests** · **HW** · **Uncertainty / blocker**.
 
 ### 1.1 Delivered, spec-independent (decisions D, verifiable now)
 
@@ -58,38 +85,38 @@ Columns: **Source** (evidence class + exact doc/section/revision when C) · **Ob
 
 | ID | Feature / layer | Source | Obtained? | Impl | Tests | HW | Blocker |
 |---|---|---|---|---|---|---|---|
-| IPS-01 | Secured IP frame format | U | no | not started | — | — | BLOCKED-SPEC |
-| IPS-02 | Session establishment / authentication | U | no | not started | — | — | BLOCKED-SPEC |
-| IPS-03 | Credential derivation from keyring | U | no | not started | — | — | BLOCKED-SPEC |
-| IPS-04 | Per-message authentication/encryption, nonce | U | no | not started | — | — | BLOCKED-SPEC |
-| IPS-05 | Sequence / replay / reorder / duplicates | U | no | not started | — | — | BLOCKED-SPEC |
-| IPS-06 | Session status, timeouts, renewal, counter exhaustion | U | no | not started | — | — | BLOCKED-SPEC |
-| IPS-07 | Secure tunnelling | U | no | not started | — | not validated | BLOCKED-SPEC, BLOCKED-HW |
-| IPS-08 | Secure routing, timer sync | U | no | not started | — | not validated | BLOCKED-SPEC, BLOCKED-HW |
-| IPS-09 | Reconnect without counter reuse | U | no | not started | — | — | BLOCKED-SPEC |
-| IPS-10 | TCP transport variant (if required) | U | no | not started | — | — | BLOCKED-SPEC |
-| IPS-11 | v2 Core / Tunnelling (AN 184/185 applicability) | U | no | not started | — | — | BLOCKED-SPEC |
+| IPS-01 | Secured IP frame format | P: AN 159 (§/rev U) | no | not started | — | — | BLOCKED-SPEC |
+| IPS-02 | Session establishment / authentication | P: AN 159 (§/rev U) | no | not started | — | — | BLOCKED-SPEC |
+| IPS-03 | Credential derivation from keyring | P: AN 159 + keyring page (§/rev U) | no | not started | — | — | BLOCKED-SPEC |
+| IPS-04 | Per-message authentication/encryption, nonce | P: AN 159 (§/rev U) | no | not started | — | — | BLOCKED-SPEC |
+| IPS-05 | Sequence / replay / reorder / duplicates | P: AN 159 (§/rev U) | no | not started | — | — | BLOCKED-SPEC |
+| IPS-06 | Session status, timeouts, renewal, counter exhaustion | P: AN 159 (§/rev U) | no | not started | — | — | BLOCKED-SPEC |
+| IPS-07 | Secure tunnelling | P: AN 159, 185 (§/rev U) | no | not started | — | not validated | BLOCKED-SPEC, BLOCKED-HW |
+| IPS-08 | Secure routing, timer sync | P: AN 159, 183 (§/rev U) | no | not started | — | not validated | BLOCKED-SPEC, BLOCKED-HW |
+| IPS-09 | Reconnect without counter reuse | P: AN 159 (§/rev U) | no | not started | — | — | BLOCKED-SPEC |
+| IPS-10 | TCP transport variant (if required) | U (AN 159/185?) | no | not started | — | — | BLOCKED-SPEC |
+| IPS-11 | v2 Core / Tunnelling / System Broadcast (AN 183/184/185) | P: AN 183, 184, 185 listed under IP Secure (applicability to plain tunnelling U) | no | not started | — | — | BLOCKED-SPEC |
 
 ### 1.3 KNX Data Secure
 
 | ID | Feature / layer | Source | Obtained? | Impl | Tests | HW | Blocker |
 |---|---|---|---|---|---|---|---|
-| DS-01 | Secured APDU recognition and format | U | no | not started | — | — | BLOCKED-SPEC |
-| DS-02 | Verify-then-decode receive path | U | no | policy half only (S-07) | — | — | BLOCKED-SPEC |
-| DS-03 | Secured send | U | no | not started | — | not validated | BLOCKED-SPEC, BLOCKED-HW |
-| DS-04 | Sequence numbers, freshness, synchronisation | U | no | not started | — | — | BLOCKED-SPEC |
-| DS-05 | Per-GA / per-device key mapping | U | no | not started | — | — | BLOCKED-SPEC |
-| DS-06 | Mixed secure + plain objects | U | no | not started | — | not validated | BLOCKED-SPEC |
-| DS-07 | Related application notes (163/177/170/193/194) | U | no | not started | — | — | BLOCKED-SPEC |
+| DS-01 | Secured APDU recognition and format | P: AN 158 (§/rev U) | no | not started | — | — | BLOCKED-SPEC |
+| DS-02 | Verify-then-decode receive path | P: AN 158 (§/rev U) | no | policy half only (S-07) | — | — | BLOCKED-SPEC |
+| DS-03 | Secured send | P: AN 158 (§/rev U) | no | not started | — | not validated | BLOCKED-SPEC, BLOCKED-HW |
+| DS-04 | Sequence numbers, freshness, synchronisation | P: AN 158 (§/rev U) | no | not started | — | — | BLOCKED-SPEC |
+| DS-05 | Per-GA / per-device key mapping | P: AN 158 + keyring page (§/rev U) | no | not started | — | — | BLOCKED-SPEC |
+| DS-06 | Mixed secure + plain objects | P: AN 158 (§/rev U) | no | not started | — | not validated | BLOCKED-SPEC |
+| DS-07 | Related application notes (163/177/170/193/194) | P: AN 163, 177, 170, 193, 194 listed (content/titles U) | no | not started | — | — | BLOCKED-SPEC |
 
 ### 1.4 Keyring
 
 | ID | Feature | Source | Obtained? | Impl | Tests | HW | Blocker |
 |---|---|---|---|---|---|---|---|
-| KR-01 | File structure, integrity/signature | U | no | not started | — | — | BLOCKED-SPEC |
-| KR-02 | Decryption with keyring password | U | no | not started | — | — | BLOCKED-SPEC |
-| KR-03 | Relationship validation (interfaces, devices, GAs, projects) | U | no | infrastructure only (S-14) | — | — | BLOCKED-SPEC |
-| KR-04 | Separation of IP-Secure vs Data-Secure credentials in storage | U | no | namespacing convention only | — | — | BLOCKED-SPEC |
+| KR-01 | File structure, integrity/signature | P: Keyring File Format page (content unseen) | no | not started | — | — | BLOCKED-SPEC |
+| KR-02 | Decryption with keyring password | P: Keyring File Format page (content unseen) | no | not started | — | — | BLOCKED-SPEC |
+| KR-03 | Relationship validation (interfaces, devices, GAs, projects) | P: Keyring File Format page (content unseen) | no | infrastructure only (S-14) | — | — | BLOCKED-SPEC |
+| KR-04 | Separation of IP-Secure vs Data-Secure credentials in storage | P: Keyring File Format page; AN 158/159 (U) | no | namespacing convention only | — | — | BLOCKED-SPEC |
 
 ### 1.5 Standard KNX (no spec blocker; not Secure-specific)
 

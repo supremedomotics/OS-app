@@ -15,6 +15,7 @@ See `docs/architecture/knx-clean-room-parity-matrix.md` (stages, removal gates, 
   only then remove `knxultimate` (code, manifest, lockfile via pnpm, image, SBOM; delete `dpt-differential.test.ts`).
 - Decide: fix D1/D2 (HVAC status/setpoints never decode with the real library) in the legacy path now, or let the native
   cut-over fix them.
+- **Unblock KNX Secure:** follow `docs/architecture/knx-secure-spec-acquisition.md` (inventory MyKNX/membership; request docs/revisions/conformance material; ETS licence; secure bench hardware).
 - Key store: TPM driver + recovery wrapper design (BLOCKED-HW); rollback resistance via trusted counter; cross-process lock test.
 - Removal gates: see `docs/architecture/knx-removal-gates.md` (all open/partial).
 - **KNX Secure (mandatory) — BLOCKED-SPEC/HW:** obtain normative docs + vectors; then keyring parser, IP Secure, Data Secure,
