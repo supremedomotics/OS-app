@@ -4,6 +4,16 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: KNX IP Secure — security review gate, review fixes, real TCP socket (loopback-verified; NOT hardware-tested, NOT production)
+
+Review: `docs/architecture/knx-ip-secure-security-review.md`. Found+fixed F1 (reflected client frame / shared nonce domain → D5: drop own serial, refuse zero serial)
+and F3 (unexpected fault escaped receive → D6 close fail-closed); both have mutation-verified regressions. Vectors verified genuine (53/53 present in spec text),
+absent from tree and all history; 22 vector tests skip without `KNX_SECURE_VECTORS`. New `native/tcp-socket.ts` (`createTcpStreamFactory`, node:net byte pipe, no destination
+policy) + 24 real-loopback tests incl. a secure session over a real socket against the simulated gateway; simulator isolation proven statically + at runtime.
+Counts: secure 87 pass (65 + 22 skipped without vectors); `src/knx` 744 (722 + 22 skipped). **Tunnelling in the session NOT integrated** — HPAI/heartbeat/disconnect over TCP,
+status codes and AN183 scope need Core v2 / Overview (absent). Production driver, `knxultimate`, flags, policy.ts unchanged; secure mode still disabled.
+Next: obtain Core v2 + Overview; then stream-mode tunnel client (TUN §2.6.2) inside the session; hardware bench.
+
 ## Session: KNX IP Secure — licensed-spec audit + clean-room client implementation (simulator-verified only; NOT production, NOT hardware-tested)
 
 Branch `claude/great-keller-fmenbn`; no PR. Licensed PDFs stay outside Git (`.gitignore` extended). Done: document inventory/provenance, requirements

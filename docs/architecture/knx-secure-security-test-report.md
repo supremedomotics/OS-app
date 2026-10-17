@@ -65,3 +65,19 @@ Test classes: **vector** (spec worked examples) · **independent** (cross-checks
 **simulator** (client vs our own `VirtualSecureGateway`) · **conformance** (none executed — TSSK is only mapped) · **hardware** (none).
 A bug found by these tests: the virtual TCP stream dropped in-flight data on graceful close (fixed in the simulator, not the driver).
 Not tested: real sockets, any real gateway, tunnelling inside a session, routing, Data Secure, keyring.
+
+## Addendum 2 — security review gate + real TCP (2026-10-17)
+Commit `93777b3`. Details: `knx-ip-secure-security-review.md`.
+
+| Run | Passed | Failed | Skipped |
+|---|---|---|---|
+| `src/knx/native/secure` **with** licensed vectors | **87** | 0 | 0 |
+| `src/knx/native/secure` **without** vectors | **65** | 0 | **22** (spec-vector tests) |
+| `src/knx/native/tcp-socket.test.ts` (real loopback TCP, 127.0.0.1) | **24** | 0 | 0 |
+| `src/knx` regression **with** vectors | **744** | 0 | 0 |
+| `src/knx` regression **without** vectors | **722** | 0 | **22** |
+| `tsc --noEmit`, `npm run build` | clean | — | — |
+
+New: 4 review regressions in `ip-session.test.ts` (reflection ×2, zero serial, fault→closed) + 24 loopback TCP tests. Verification of the
+vectors: all 53 hex values are present in the extracted spec text; none of the 35 long values occurs in the tree or any commit; tampering
+with three vectors made 4 tests fail. Hardware: none. Conformance tests executed: none.

@@ -70,3 +70,7 @@ Never logged; `diagnostics()` exposes counters/states only. Threats addressed in
 reordering (sequence ≤ stored discarded, MAC before state advance, D3), cross-session replay (fresh key per session, D2), nested wrappers (D4), TCP
 fragmentation/merging and oversized frames (deframer limits), counter wrap (closes at 2^48-1), low-order/zero peer keys (rejected). Residual/unverified: no real
 socket or gateway tested; Core v2 TCP rules (U); side-channel properties of Node crypto not assessed; passive traffic analysis is out of scope.
+
+Review additions (2026-10-17): reflection of the client's own frames and nonce reuse between the two directions are mitigated by D5 (own serial
+dropped; zero serial refused) — not specification text. Unexpected faults fail closed (D6). Real-socket exposure: connect timeout, bounded write
+queue, handler faults contained; no destination policy in the socket layer (configuration owns the gateway address). See `knx-ip-secure-security-review.md`.

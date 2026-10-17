@@ -104,10 +104,11 @@ property/cross-check test · **S** = simulator test (our own simulated gateway �
 | CCM primitive (IPS-03, DS-03) | implemented, `secure/ccm.ts` | V (IPS A.2–A.6, AL C.1.1–C.1.4) + I (Node CBC/CTR cross-check, tamper) |
 | Key derivation, ECDH, session key (IPS-04…) | implemented, `secure/ip-keys.ts` | V + I |
 | Frame codecs 0950–0955 | implemented, `secure/ip-frames.ts` | V (all spec binary examples) + I |
+| Review fixes D5 (reflection/serial) and D6 (fail closed on faults) | implemented, not spec text | S (4 regression tests, mutation-verified) |
 | Session establishment, server auth, timeouts, sequence rules, close (IPS-05…13) | implemented client, `secure/ip-session.ts` | S only (35 tests); decisions D1–D4 |
 | TCP stream deframing (IPS-14/22 partial) | `secure/stream.ts` header-driven deframer | S; Core v2 stream rules remain **U** |
-| Real TCP socket (`node:net`) | **not started** | — |
-| Tunnelling inside the session (IPS-15/23/24) | **not started** (no stream mode in tunnel client) | — |
+| Real TCP socket (`node:net`), `tcp-socket.ts` | implemented as a byte pipe; Core v2 TCP rules **U** | loopback-TCP (24 tests, real kernel sockets, simulated gateway on the far end) — not a real gateway |
+| Tunnelling inside the session (IPS-15/23/24) | **BLOCKED-SPEC** (HPAI/heartbeat/disconnect over TCP are Core v2; see `knx-ip-secure-security-review.md` §5) | — |
 | Discovery (IPS-17), multicast routing runtime/timer machine (IPS-18…20) | **not started** (codec only for 0955) | — |
 | Data Secure S-AL (DS-01…08), keyring (KR-*) | **BLOCKED-SPEC** — nothing implemented | — |
 
