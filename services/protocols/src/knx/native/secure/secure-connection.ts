@@ -58,7 +58,11 @@ export class SecureSessionConnection {
       throw new SecureSessionError("transport_closed", `cannot open TCP connection: ${e instanceof Error ? e.message : String(e)}`);
     }
     if (this.settled) { this.socket?.destroy(); this.socket = null; return auth; }
-    this.session.start();
+    try { this.session.start(); } catch (e) {
+      // start() refuses (e.g. a reused key pair): nothing was sent, but the TCP connection is already open — release it.
+      this.session.close("local_close");
+      throw e;
+    }
     return auth;
   }
 

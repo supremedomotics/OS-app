@@ -81,6 +81,21 @@ export interface SecureSessionDiagnostics {
 
 export interface SessionClosedEvent { reason: SessionCloseReason; status?: number }
 
+/**
+ * IPS §2.2.3.1.1 ("shall"): a NEW client key pair for every session. The generator seam makes reuse possible by mistake (a constant test pair, a stuck RNG);
+ * reuse would give the same session key and counters restarting at 0 — every old wrapper would verify again. Refuse a public value already used by this process
+ * (bounded memory; decision I — enforces the normative shall, adds no wire behaviour).
+ */
+const usedClientPublics = new Set<string>();
+const USED_MAX = 1024;
+function claimClientPublic(pub: Buffer): boolean {
+  const k = pub.toString("hex");
+  if (usedClientPublics.has(k)) return false;
+  usedClientPublics.add(k);
+  if (usedClientPublics.size > USED_MAX) usedClientPublics.delete(usedClientPublics.values().next().value as string);
+  return true;
+}
+
 type L<T> = (v: T) => void;
 
 export class SecureSessionClient {
@@ -141,7 +156,9 @@ export class SecureSessionClient {
     if (this.state !== "idle") throw new SecureSessionError("already_started", "a secure session is single-use (D2); create a new instance");
     const o = this.o;
     this.assertConfigured();
-    this.kp = (o.generateKeyPair ?? generateEcdhKeyPair)();   // fresh pair per session, never reused (§2.2.3.1.1)
+    const kp = (o.generateKeyPair ?? generateEcdhKeyPair)();   // fresh pair per session, never reused (§2.2.3.1.1)
+    if (!claimClientPublic(kp.publicKey)) { kp.privateKey.wipe(); throw new SecureSessionError("invalid_option", "key pair reuse refused: a new ECDH key pair is required for every session (IPS §2.2.3.1.1)"); }
+    this.kp = kp;
     this.transmit(encodeSessionRequest(this.kp.publicKey));
     this.state = "awaiting_response";
     this.arm(this.cfg.responseTimeoutMs, () => this.close("response_timeout"));

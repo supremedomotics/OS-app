@@ -13,6 +13,7 @@ export class SecureStreamTunnelLink implements TunnelLink {
   readonly simulated: boolean;
   private conn: SecureSessionConnection | null = null;
   private closedByUs = false;
+  private finalDiagnostics: ReturnType<SecureSessionConnection["diagnostics"]> | null = null;
 
   constructor(private readonly opts: SecureConnectionOptions) {
     this.simulated = isSimulated(opts.streamFactory);
@@ -26,6 +27,9 @@ export class SecureStreamTunnelLink implements TunnelLink {
     await conn.connect();   // rejects with SecureSessionError on any handshake/transport failure; nothing is sent in the clear
   }
 
+  /** Counters and state of the underlying secure session (never secrets); null before open, the final snapshot after close. */
+  sessionDiagnostics() { return this.conn?.diagnostics() ?? this.finalDiagnostics; }
+
   send(frame: Buffer): void { this.conn?.sendInner(frame); }
 
   routeBack(): void { /* the peer is the session; there is no per-frame addressing */ }
@@ -33,6 +37,7 @@ export class SecureStreamTunnelLink implements TunnelLink {
   close(): void {
     this.closedByUs = true;
     this.conn?.close();
+    this.finalDiagnostics = this.conn?.diagnostics() ?? this.finalDiagnostics;
     this.conn = null;
   }
 }
