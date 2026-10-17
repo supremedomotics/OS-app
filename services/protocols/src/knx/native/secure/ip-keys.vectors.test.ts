@@ -17,7 +17,7 @@ describe.skipIf(!hasVectors)("IP Secure key derivation vs the specification's wo
     expect(h.use((b) => b.toString("hex"))).toBe(v("a3_password_hash").toString("hex"));
   });
   it("§2.3.1.4.3: the empty password has the fixed hash printed in the specification", async () => {
-    const h = await deriveUserPasswordHash(passwordSecret(""));
+    const h = await deriveUserPasswordHash(passwordSecret("", { allowEmpty: true }));
     expect(h.use((b) => b.toString("hex"))).toBe(vs("empty_password_hash"));
   });
   it("A.1/A.2: public values follow from the example private keys; both sides compute the printed shared secret and session key", () => {

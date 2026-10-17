@@ -412,3 +412,41 @@ describe("review regressions", () => {
     expect(c.diagnostics().closedReason).toBe("protocol_violation");
   });
 });
+
+describe("B7 / B8 evidence", () => {
+  it("B7 (N: IPS §2.2.3.5.2.5, E03 in UNAUTHENTICATED → A3): a local close before authentication completes sends a wrapped STATUS_CLOSE; the server frees the session", async () => {
+    let n = 0;
+    net.tap((dir, chunk) => (dir === "client->server" && chunk.length >= 44 && chunk.readUInt16BE(2) === 0x0950 && n++ === 0 ? [] : [chunk])); // swallow SESSION_AUTHENTICATE
+    const c = client(); const p = c.connect(); p.catch(() => undefined);
+    await clock.advance(30);
+    expect(c.diagnostics().state).toBe("awaiting_status");
+    expect([...gw.sessions.values()][0]!.state).toBe("unauthenticated");
+    c.close(); await clock.advance(30);
+    expect(gw.counters.closedByClient).toBe(1);
+    expect(gw.sessions.size).toBe(0);
+    expect(c.diagnostics().closedReason).toBe("local_close");
+    await expect(p).rejects.toMatchObject({ code: "local_close" });
+  });
+  it("B7: closing before any key exists (awaiting_response) writes no frame at all, only TCP", async () => {
+    gw.faults.silent = true;
+    const seen = recordClientFrames();
+    const c = client(); const p = c.connect(); p.catch(() => undefined);
+    await clock.advance(5);
+    c.close(); await clock.advance(30);
+    expect(seen).toEqual([SecureService.SESSION_REQUEST]);
+  });
+  it("B8: a wrapper carrying an encapsulated frame of exactly 4080 octets is accepted; one octet more is discarded as malformed without disturbing the session", async () => {
+    const c = client(); await open(c);
+    const got: Buffer[] = []; c.onInner((f) => got.push(f));
+    const s = [...gw.sessions.values()][0]!;
+    const body = tunnelling(4080);
+    gw.sendInner(s, body); await clock.advance(10);
+    expect(got).toHaveLength(1); expect(got[0]!.equals(body)).toBe(true);
+    const ok = encodeSecureWrapper({ sessionId: s.id, sequence: 500n, serial: rng.bytes(6), tag: Buffer.alloc(2), inner: body, key: s.key! });
+    const tooBig = Buffer.concat([ok, Buffer.alloc(1)]); tooBig.writeUInt16BE(tooBig.length, 4);
+    const before = c.diagnostics().discarded.malformed;
+    c.session.receive(tooBig);
+    expect(c.diagnostics().discarded.malformed).toBe(before + 1);
+    expect(c.diagnostics().state).toBe("authenticated");
+  });
+});

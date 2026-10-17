@@ -20,7 +20,7 @@
  *   D6  Any unexpected internal fault while processing received bytes closes the session (fail closed) rather than propagating.
  *   D4  A wrapper is never accepted when it itself contains a secure-family frame other than SESSION_STATUS (no nesting, §2.2.1.2.2.2).
  */
-import { SecureService, SessionStatus, SEQUENCE_MAX, KnxSecureFrameError, decodeSessionStatus, encodeSecureWrapper, encodeSessionAuthenticate, encodeSessionRequest, encodeSessionStatus, openSecureWrapper, parseSecureWrapper, parseSessionResponse, peekSecureService, verifySessionResponse } from "./ip-frames.js";
+import { SecureService, SessionStatus, SEQUENCE_MAX, WRAPPER_MAX_SIZE, KnxSecureFrameError, decodeSessionStatus, encodeSecureWrapper, encodeSessionAuthenticate, encodeSessionRequest, encodeSessionStatus, openSecureWrapper, parseSecureWrapper, parseSessionResponse, peekSecureService, verifySessionResponse } from "./ip-frames.js";
 import { deriveSessionKey, generateEcdhKeyPair, KnxSecureKeyError, type EcdhKeyPair } from "./ip-keys.js";
 import type { Secret } from "../security/secret.js";
 import type { Clock, TimerHandle } from "../transport.js";
@@ -194,6 +194,7 @@ export class SecureSessionClient {
 
   private onWrapper(frame: Buffer): void {
     if (this.state !== "awaiting_status" && this.state !== "authenticated") { this.d.unauthenticatedState++; return; }
+    if (frame.length > WRAPPER_MAX_SIZE) { this.d.malformed++; return; }    // cannot be a valid wrapper (P ≤ 4 080 octets); no MAC work for it
     const p = parseSecureWrapper(frame);
     if (p.sessionId !== this.sessionId) { this.d.wrongSession++; return; }  // other/unknown session id → discard (§2.2.1.3.3)
     if (p.serial.equals(this.o.serialNumber)) { this.d.reflected++; return; } // D5

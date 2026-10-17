@@ -1,8 +1,9 @@
+import { createCipheriv } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import {
   decodeSessionRequest, decodeSessionStatus, encodeSecureWrapper, encodeSessionAuthenticate, encodeSessionRequest, encodeSessionResponse, encodeSessionStatus, encodeTimerNotify,
   KnxSecureFrameError, openSecureWrapper, parseSecureWrapper, parseSessionAuthenticate, parseSessionResponse, parseTimerNotify, peekSecureService, SecureService, SEQUENCE_MAX,
-  verifySessionAuthenticate, verifySessionResponse, verifyTimerNotify, WRAPPER_MIN_SIZE,
+  verifySessionAuthenticate, verifySessionResponse, verifyTimerNotify, WRAPPER_MAX_SIZE, WRAPPER_MIN_SIZE,
 } from "./ip-frames.js";
 import { generateEcdhKeyPair } from "./ip-keys.js";
 import { Secret } from "../security/secret.js";
@@ -132,5 +133,39 @@ describe("fuzz: decoders only ever throw KnxSecureFrameError", () => {
       const b = i % 2 ? rng.bytes(rng.int(80)) : (() => { const m = Buffer.from(seeds[rng.int(seeds.length)]!); for (let j = 0, n = 1 + rng.int(3); j < n; j++) m[rng.int(m.length)] = rng.int(256); return m.subarray(0, rng.int(m.length) + 1); })();
       for (const fn of fns) { try { fn(b); } catch (e) { expect(e).toBeInstanceOf(KnxSecureFrameError); } }
     }
+  });
+});
+
+// Blocker B8: the governing limit (IPS §2.2.1.3.2 note) applies to P = the ENCAPSULATED frame: 255 × 16 = 4 080 octets, which makes the
+// complete SECURE_WRAPPER 6 + 16 + 4 080 + 16 = 4 118 octets. It does not apply to plain frames and is not the stream-deframer cap (8 192, decision I).
+describe("wrapper size boundaries (B8)", () => {
+  it("arithmetic: overhead 38, max payload 4080, max wrapper 4118", () => {
+    expect(WRAPPER_MAX_SIZE).toBe(6 + 16 + 4080 + 16);
+    expect(WRAPPER_MAX_SIZE).toBe(4118);
+  });
+  it("an encapsulated frame of exactly 4080 octets round-trips; 4081 is refused at encoding; 5 (below the 6-octet header) is refused", () => {
+    const k = key();
+    const body = inner(4080);
+    const f = wrap(k, 5n, 2, body);
+    expect(f).toHaveLength(WRAPPER_MAX_SIZE);
+    expect(openSecureWrapper(parseSecureWrapper(f), k)!.equals(body)).toBe(true);
+    expect(code(() => wrap(k, 5n, 2, inner(4081)))).toBe("invalid_argument");
+    expect(code(() => wrap(k, 5n, 2, Buffer.alloc(5)))).toBe("invalid_argument");
+  });
+  it("the last keystream block (counter [j] = FFh) matches an independent AES-CTR computation", () => {
+    const k = key(), body = inner(4080), serial = rng.bytes(6), tag = rng.bytes(2);
+    const f = encodeSecureWrapper({ sessionId: 9, sequence: 0x0123456789abn, serial, tag, inner: body, key: k });
+    const seq = Buffer.from("0123456789ab", "hex");
+    const ctr1 = Buffer.concat([seq, serial, tag, Buffer.from([0xff, 0x01])]);
+    const ks = k.use((kk) => { const c = createCipheriv("aes-128-ctr", kk, ctr1); return Buffer.concat([c.update(Buffer.alloc(4080)), c.final()]); });
+    const expected = Buffer.from(body.map((x, i) => x ^ ks[i]!));
+    expect(f.subarray(6 + 16, 6 + 16 + 4080).equals(expected)).toBe(true);
+  });
+  it("a received wrapper larger than 4118 octets can never open, even with a header that is internally consistent", () => {
+    const k = key();
+    const f = wrap(k, 1n, 2, inner(4080));
+    const big = Buffer.concat([f, Buffer.alloc(16)]);
+    big.writeUInt16BE(big.length, 4);
+    expect(openSecureWrapper(parseSecureWrapper(big), k)).toBeNull();
   });
 });

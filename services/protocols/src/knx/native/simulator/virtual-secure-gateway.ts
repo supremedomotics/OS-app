@@ -161,7 +161,10 @@ export class VirtualSecureGateway {
     s.lastRecv = p.sequence;
     const svc = peekSecureService(inner);
     if (s.state === "unauthenticated") {
-      if (svc !== SecureService.SESSION_AUTHENTICATE) { this.endWith(s, SessionStatus.UNAUTHENTICATED); return; }   // A6
+      if (svc === SecureService.SESSION_STATUS && decodeSessionStatus(inner) === SessionStatus.CLOSE) {              // E03 in UNAUTHENTICATED → A3 (IPS §2.2.3.5.2.5)
+        this.counters.closedByClient++; this.sendInner(s, encodeSessionStatus(SessionStatus.CLOSE)); this.drop(s); s.conn.end(); return;
+      }
+      if (svc !== SecureService.SESSION_AUTHENTICATE) { this.endWith(s, SessionStatus.UNAUTHENTICATED); return; }   // A6 (E04/E05)
       const auth = parseSessionAuthenticate(inner);
       const hash = this.o.users.get(auth.userId);
       if (!hash || !verifySessionAuthenticate(auth, s.clientPublic!, s.serverKeyPair!.publicKey, hash)) { this.counters.authFailures++; this.endWith(s, SessionStatus.AUTHENTICATION_FAILED); return; } // A2

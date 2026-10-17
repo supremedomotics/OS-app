@@ -19,14 +19,29 @@ export const PBKDF2_ITERATIONS = 65_536;
 export const PBKDF2_KEY_BYTES = 16;
 
 export class KnxSecureKeyError extends Error {
-  constructor(readonly code: "invalid_public_key" | "weak_shared_secret" | "invalid_private_key" | "invalid_input", message: string) {
+  constructor(readonly code: "invalid_public_key" | "weak_shared_secret" | "invalid_private_key" | "invalid_input" | "unsupported_password_encoding", message: string) {
     super(message);
     this.name = "KnxSecureKeyError";
   }
 }
 
+/**
+ * TEMPORARY GUARD (blocker B6, evidence U): the supplied text defines no character encoding or normalisation for user-entered
+ * passwords (only an ASCII worked example). Until KNX confirms it, anything that is not 7-bit ASCII is REFUSED instead of being
+ * silently encoded with a guess — a wrong guess yields a wrong key and burns a server-side authentication attempt. Set this to
+ * `false` (one line) once the encoding is verified. ASCII acceptance does not establish interoperability.
+ */
+export const PASSWORD_ASCII_ONLY = true;
+
+function assertAsciiBytes(secret: Secret): void {
+  if (PASSWORD_ASCII_ONLY && secret.use((b) => b.some((x) => x > 0x7f))) {
+    throw new KnxSecureKeyError("unsupported_password_encoding", "password contains non-ASCII characters; their encoding is not verified (blocker B6) and they are refused");
+  }
+}
+
 async function derive(secret: Secret, salt: string): Promise<Secret> {
   if (secret.wiped) throw new KnxSecureKeyError("invalid_input", "secret has been wiped");
+  assertAsciiBytes(secret);
   const out = await secret.use((b) => pbkdf2Async(b, Buffer.from(salt, "utf8"), PBKDF2_ITERATIONS, PBKDF2_KEY_BYTES, "sha256"));
   const s = new Secret(out);
   out.fill(0);
@@ -38,8 +53,18 @@ export const deriveDeviceAuthenticationCode = (secret: Secret): Promise<Secret> 
 /** Password hash for one user id (§2.3.1.4.1). */
 export const deriveUserPasswordHash = (password: Secret): Promise<Secret> => derive(password, SALT_USER_PASSWORD);
 
-export function passwordSecret(text: string): Secret {
-  const b = Buffer.from(text, "utf8");
+/**
+ * Password text → Secret. Rejects (before any connection is possible) non-strings, non-ASCII text (B6, see PASSWORD_ASCII_ONLY) and,
+ * unless `allowEmpty`, the empty string. The specification does define a fixed hash for the empty password (used by its worked
+ * example), so derivation itself accepts it; rejecting it at entry is SupremeOS policy (I), not spec text.
+ */
+export function passwordSecret(text: string, opts: { allowEmpty?: boolean } = {}): Secret {
+  if (typeof text !== "string") throw new KnxSecureKeyError("invalid_input", "password must be a string");
+  if (text.length === 0 && opts.allowEmpty !== true) throw new KnxSecureKeyError("invalid_input", "empty password refused");
+  if (PASSWORD_ASCII_ONLY && /[^\x00-\x7f]/.test(text)) {
+    throw new KnxSecureKeyError("unsupported_password_encoding", "password contains non-ASCII characters; their encoding is not verified (blocker B6) and they are refused");
+  }
+  const b = Buffer.from(text, "latin1"); // 7-bit only at this point: latin1 == ASCII == UTF-8; no encoding choice is made
   const s = new Secret(b);
   b.fill(0);
   return s;

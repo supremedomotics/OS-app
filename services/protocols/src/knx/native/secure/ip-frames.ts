@@ -33,6 +33,12 @@ export const SessionStatus = {
 export const WRAPPER_MIN_SIZE = 44;
 export const WRAPPER_OVERHEAD = 6 + 16 + 16;           // header + security info + MAC
 export const MAX_WRAPPED_PAYLOAD = 255 * 16;            // CCM counter limit (IPS §2.2.1.3.2 note: 4 080 octets)
+/**
+ * Largest possible SECURE_WRAPPER = header 6 + security info 16 + P + MAC 16 with P = the encapsulated KNXnet/IP frame ≤ 255×16 = 4 080 octets
+ * (IPS §2.2.1.3.2 note: P is limited by B0 to 65 279 octets but "practically" by the one-octet block counter [j] to 4 080) ⇒ 4 118 octets.
+ * Class N-derived: it bounds ONLY the outer SECURE_WRAPPER (P is the nested frame; the MAC is not part of P). It says nothing about plain frames.
+ */
+export const WRAPPER_MAX_SIZE = WRAPPER_OVERHEAD + MAX_WRAPPED_PAYLOAD;
 export const SEQUENCE_MAX = (1n << 48n) - 1n;
 
 export type SecureFrameErrorCode =
