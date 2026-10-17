@@ -376,3 +376,39 @@ describe("resources", () => {
     void peekSecureService;
   });
 });
+
+// Security-review regressions (see docs/architecture/knx-ip-secure-security-review.md). Decisions D5/D6: NOT stated in the specification text.
+describe("review regressions", () => {
+  it("F1/D5: a frame the client itself sent, reflected back on the stream, is never delivered as server data", async () => {
+    let out: Buffer | null = null;
+    net.tap((dir, chunk) => { if (dir === "client->server" && chunk.length >= 44 && chunk.readUInt16BE(2) === 0x0950) out = Buffer.from(chunk); return [chunk]; });
+    const c = client(); await open(c);
+    const delivered: Buffer[] = []; c.onInner((f) => delivered.push(f));
+    c.sendInner(tunnelling()); await clock.advance(10);
+    expect(out).not.toBeNull();
+    c.session.receive(out!);                                   // same key, valid MAC, sequence above the server's last — only the serial gives it away
+    expect(delivered).toHaveLength(0);
+    expect(c.diagnostics().discarded.reflected).toBe(1);
+    expect(c.diagnostics().state).toBe("authenticated");
+  });
+  it("F1/D5: a wrapper carrying our own serial number is dropped even when it was authentically produced under the session key (nonce-domain separation)", async () => {
+    const c = client({ serialNumber: Buffer.from("00fa11223344", "hex") }); await open(c);
+    const s = [...gw.sessions.values()][0]!;
+    gw.sendInnerWithSerial(s, tunnelling(), Buffer.from("00fa11223344", "hex"));
+    await clock.advance(10);
+    expect(c.diagnostics().discarded.reflected).toBe(1);
+    expect(c.diagnostics().framesAccepted).toBe(1);            // only the AUTHENTICATION_SUCCESS status
+  });
+  it("F2/D5: an all-zero serial number is not an assigned KNX serial and is refused before any connection", async () => {
+    const c = client({ serialNumber: Buffer.alloc(6) });
+    await expect(c.connect()).rejects.toMatchObject({ code: "invalid_option" });
+    expect(net.stats.connections).toBe(0);
+  });
+  it("F3/D6: an unexpected internal fault while processing a frame closes the session instead of escaping to the socket callback", async () => {
+    const c = client(); await open(c);
+    const evil = { get length(): number { throw new Error("boom"); } } as unknown as Buffer;
+    expect(() => c.session.receive(evil)).not.toThrow();
+    expect(c.diagnostics().state).toBe("closed");
+    expect(c.diagnostics().closedReason).toBe("protocol_violation");
+  });
+});

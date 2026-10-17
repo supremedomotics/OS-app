@@ -14,6 +14,10 @@
  *       than one SESSION_AUTHENTICATE per ECDH session key (§2.2.3.8.3).
  *   D3  Nothing is ever sent or delivered in the clear: plain frames received on the session are ignored and counted; there is no
  *       downgrade path. Received sequence state advances ONLY after a frame's MAC has verified.
+ *   D5  A wrapper whose serial number equals OUR OWN is dropped. Both directions share one session key and one nonce layout
+ *       (SeqInf‖Serial‖Tag), so a reflected client frame would otherwise verify as "server data", and equal serials would reuse a CCM
+ *       nonce. The text does not address this; the own serial must also be non-zero (an assigned KNX serial). Not spec-derived.
+ *   D6  Any unexpected internal fault while processing received bytes closes the session (fail closed) rather than propagating.
  *   D4  A wrapper is never accepted when it itself contains a secure-family frame other than SESSION_STATUS (no nesting, §2.2.1.2.2.2).
  */
 import { SecureService, SessionStatus, SEQUENCE_MAX, KnxSecureFrameError, decodeSessionStatus, encodeSecureWrapper, encodeSessionAuthenticate, encodeSessionRequest, encodeSessionStatus, openSecureWrapper, parseSecureWrapper, parseSessionResponse, peekSecureService, verifySessionResponse } from "./ip-frames.js";
@@ -67,7 +71,7 @@ export interface SecureSessionDiagnostics {
   framesSent: number;
   framesAccepted: number;
   discarded: {
-    malformed: number; plainFrame: number; wrongSession: number; replay: number; macFailure: number; nested: number; unexpected: number; unauthenticatedState: number;
+    malformed: number; plainFrame: number; wrongSession: number; replay: number; macFailure: number; nested: number; unexpected: number; unauthenticatedState: number; reflected: number;
   };
   nextSendSequence: string;
   lastReceivedSequence: string | null;
@@ -94,7 +98,7 @@ export class SecureSessionClient {
   private closedStatus: number | null = null;
   private framesSent = 0;
   private framesAccepted = 0;
-  private readonly d = { malformed: 0, plainFrame: 0, wrongSession: 0, replay: 0, macFailure: 0, nested: 0, unexpected: 0, unauthenticatedState: 0 };
+  private readonly d = { malformed: 0, plainFrame: 0, wrongSession: 0, replay: 0, macFailure: 0, nested: 0, unexpected: 0, unauthenticatedState: 0, reflected: 0 };
   private readonly innerL = new Set<L<Buffer>>();
   private readonly authL = new Set<L<void>>();
   private readonly closedL = new Set<L<SessionClosedEvent>>();
@@ -124,7 +128,7 @@ export class SecureSessionClient {
   assertConfigured(): void {
     const o = this.o;
     if (!Number.isInteger(o.userId) || o.userId < 0x01 || o.userId > 0x7f) throw new SecureSessionError("invalid_option", "userId must be 01h–7Fh");
-    if (o.serialNumber.length !== 6) throw new SecureSessionError("invalid_option", "serialNumber must be 6 octets and must be an assigned KNX serial number");
+    if (o.serialNumber.length !== 6 || o.serialNumber.every((x) => x === 0)) throw new SecureSessionError("invalid_option", "serialNumber must be 6 non-zero octets: an assigned KNX serial number (D5)");
     if (o.passwordHash.wiped || o.passwordHash.length !== 16) throw new SecureSessionError("invalid_option", "passwordHash must be a 16-octet secret");
     if (o.deviceAuthCode === null && o.allowUnauthenticatedServer !== true) {
       throw new SecureSessionError("invalid_option", "a Device Authentication Code is required to authenticate the server; refusing to continue without it (set allowUnauthenticatedServer only knowingly)");
@@ -145,18 +149,18 @@ export class SecureSessionClient {
 
   // ---------------------------------------------------------------------------------------------------------------- receive
 
-  /** Feed one complete KNXnet/IP frame received on the TCP connection. Never throws; bad input is counted and dropped. */
+  /** Feed one complete KNXnet/IP frame received on the TCP connection. Never throws; bad input is counted and dropped, an unexpected fault closes the session (D6). */
   receive(frame: Buffer): void {
     if (this.state === "closed" || this.state === "idle") return;
-    const svc = peekSecureService(frame);
-    if (svc === null) { this.d.plainFrame++; return; }                      // D3: plain frames are never processed here
     try {
+      const svc = peekSecureService(frame);
+      if (svc === null) { this.d.plainFrame++; return; }                    // D3: plain frames are never processed here
       if (svc === SecureService.SESSION_RESPONSE) { this.onResponse(frame); return; }
       if (svc === SecureService.SECURE_WRAPPER) { this.onWrapper(frame); return; }
       this.d.unexpected++;                                                  // REQUEST/AUTHENTICATE/TIMER_NOTIFY/STATUS in the clear
     } catch (e) {
       if (e instanceof KnxSecureFrameError) { this.d.malformed++; return; } // §2.4.1: malformed frames are ignored
-      throw e;
+      this.close("protocol_violation");                                     // D6: unexpected fault → fail closed
     }
   }
 
@@ -192,6 +196,7 @@ export class SecureSessionClient {
     if (this.state !== "awaiting_status" && this.state !== "authenticated") { this.d.unauthenticatedState++; return; }
     const p = parseSecureWrapper(frame);
     if (p.sessionId !== this.sessionId) { this.d.wrongSession++; return; }  // other/unknown session id → discard (§2.2.1.3.3)
+    if (p.serial.equals(this.o.serialNumber)) { this.d.reflected++; return; } // D5
     // §2.2.3.3 / §2.2.1.3.3: discard sequence numbers <= the stored one (checked before the MAC is allowed for unicast)
     if (this.lastRecv !== null && p.sequence <= this.lastRecv) { this.d.replay++; return; }
     const inner = openSecureWrapper(p, this.sessionKey!);

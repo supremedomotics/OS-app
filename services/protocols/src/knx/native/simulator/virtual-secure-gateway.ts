@@ -70,9 +70,10 @@ export class VirtualSecureGateway {
   private detach: (() => void) | null;
   private readonly cfg: Required<Pick<VirtualSecureGatewayOptions, "maxSessions" | "authenticationTimeoutMs" | "sessionTimeoutMs">>;
 
-  constructor(private readonly net: VirtualStreamNetwork, private readonly clock: Clock, private readonly o: VirtualSecureGatewayOptions) {
+  /** `net` null: the owner delivers connections itself through {@link acceptConnection} (e.g. a test bridging a real loopback socket). */
+  constructor(private readonly net: VirtualStreamNetwork | null, private readonly clock: Clock, private readonly o: VirtualSecureGatewayOptions) {
     this.cfg = { maxSessions: o.maxSessions ?? 4, authenticationTimeoutMs: o.authenticationTimeoutMs ?? 10_000, sessionTimeoutMs: o.sessionTimeoutMs ?? 60_000 };
-    this.detach = net.listen(o.address, o.port ?? 3671, (c) => this.accept(c));
+    this.detach = net ? net.listen(o.address, o.port ?? 3671, (c) => this.acceptConnection(c)) : null;
   }
 
   shutdown(): void {
@@ -88,6 +89,14 @@ export class VirtualSecureGateway {
     s.conn.write(f);
   }
 
+  /** TEST HOOK: a wrapper with an arbitrary serial (models a misconfigured/colliding or reflecting peer). */
+  sendInnerWithSerial(s: ServerSession, inner: Buffer, serial: Buffer): void {
+    if (!s.key) throw new Error("session has no key");
+    const f = encodeSecureWrapper({ sessionId: s.id, sequence: s.sendSeq, serial, tag: Buffer.alloc(2), inner, key: s.key });
+    s.sendSeq += 1n;
+    s.conn.write(f);
+  }
+
   /** Terminal status to the client (wrapped), then close the session and the TCP connection. */
   endWith(s: ServerSession, status: number): void {
     if (s.key) this.sendInner(s, encodeSessionStatus(status));
@@ -95,7 +104,7 @@ export class VirtualSecureGateway {
     s.conn.end();
   }
 
-  private accept(conn: ServerSide): void {
+  acceptConnection(conn: ServerSide): void {
     const deframer = new KnxStreamDeframer();
     let session: ServerSession | null = null;
     conn.onData((chunk) => {
