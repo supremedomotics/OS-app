@@ -227,6 +227,44 @@ describe("loss, retry and duplicates", () => {
     expect(c.state).toBe("closed");
     expect(closed).toEqual(["ack_timeout"]);
   });
+  it("TUN §2.6.1 (G1): after the repeat is also unanswered, the client sends DISCONNECT_REQUEST so the gateway frees the channel", async () => {
+    const c = await connected();
+    gw.faults.dropAcks = true;
+    expect(gw.activeChannels).toBe(1);
+    const p = c.sendGroup(ON);
+    const assertion = expect(p).rejects.toMatchObject({ code: "ack_timeout" });
+    await clock.advance(2100);
+    await assertion;
+    expect(c.diagnostics().closedReason).toBe("ack_timeout");
+    expect(gw.counters.disconnects).toBe(1); // the server saw and honoured the DISCONNECT_REQUEST
+    expect(gw.activeChannels).toBe(0);
+  });
+  it("TUN §2.6.1 (G2): an error ACK is repeated once; if the repeat is ACKed normally the send succeeds", async () => {
+    const c = await connected();
+    gw.faults.ackStatus = 0x26;
+    gw.faults.ackStatusTimes = 1; // first ACK carries an error, the repeat is answered normally
+    const p = c.sendGroup(ON);
+    await clock.advance(10);
+    const r = await p;
+    expect(r.attempts).toBe(2);
+    expect(c.state).toBe("connected");
+    expect(gw.activeChannels).toBe(1);
+  });
+  it("TUN §2.6.1 (G2): a persistent error ACK terminates the tunnel with DISCONNECT_REQUEST (any status, not only 0x26/0x27)", async () => {
+    for (const status of [0x26, 0x21, 0x04]) {
+      const c = await connected();
+      gw.faults.ackStatus = status;
+      gw.faults.ackStatusTimes = Number.POSITIVE_INFINITY;
+      const p = c.sendGroup(ON);
+      const assertion = expect(p).rejects.toMatchObject({ code: "ack_error", status });
+      await clock.advance(20);
+      await assertion;
+      expect(c.state).toBe("closed");
+      expect(c.diagnostics().closedReason).toBe("ack_error");
+      expect(gw.activeChannels).toBe(0);
+      gw.faults.ackStatus = null;
+    }
+  });
   it("delivers a duplicated inbound telegram once and re-ACKs", async () => {
     const c = await connected();
     const seen = onFrame(c);

@@ -38,7 +38,8 @@ export function createUdpSocketFactory(opts: UdpSocketOptions = {}): SocketFacto
           close() {
             if (closed) return;
             closed = true;
-            try { sock.close(); } catch { /* already closed */ }
+            // setImmediate: a datagram sent in the same tick (DISCONNECT_REQUEST on teardown) must leave first.
+            setImmediate(() => { try { sock.close(); } catch { /* already closed */ } });
           },
         });
       });

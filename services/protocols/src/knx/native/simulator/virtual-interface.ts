@@ -52,6 +52,10 @@ export interface InterfaceFaults {
   suppressConfirmation: boolean;
   /** Send L_Data.con with the error flag (frame not acknowledged on the bus). */
   confirmationError: boolean;
+  /** Answer client TUNNELLING_REQUESTs with this ACK status instead of E_NO_ERROR (null = normal). */
+  ackStatus: number | null;
+  /** How many ACKs carry `ackStatus` before it reverts to normal (default: unlimited). */
+  ackStatusTimes: number;
 }
 
 export interface InterfaceCounters {
@@ -61,7 +65,7 @@ export interface InterfaceCounters {
 }
 
 export class VirtualKnxInterface {
-  readonly faults: InterfaceFaults = { online: true, refuseConnectStatus: null, dropAcks: false, suppressConfirmation: false, confirmationError: false };
+  readonly faults: InterfaceFaults = { online: true, refuseConnectStatus: null, dropAcks: false, suppressConfirmation: false, confirmationError: false, ackStatus: null, ackStatusTimes: Number.POSITIVE_INFINITY };
   readonly counters: InterfaceCounters = { connects: 0, refusedConnects: 0, disconnects: 0, heartbeats: 0, tunnellingRequests: 0, duplicateRequests: 0, outOfOrderRequests: 0, malformed: 0, indicationsSent: 0, idleDrops: 0 };
   private readonly channels = new Map<number, Channel>();
   private readonly self: RemoteInfo;
@@ -176,7 +180,12 @@ export class VirtualKnxInterface {
     if (!ch) return;
     this.touch(ch);
     this.counters.tunnellingRequests++;
-    const ack = (): void => { if (!this.faults.dropAcks) this.send(from, encodeTunnellingAck({ channelId: ch.id, sequence: req.sequence, status: StatusCode.NO_ERROR })); };
+    const ack = (): void => {
+      if (this.faults.dropAcks) return;
+      let status: number = StatusCode.NO_ERROR;
+      if (this.faults.ackStatus !== null && this.faults.ackStatusTimes > 0) { status = this.faults.ackStatus; this.faults.ackStatusTimes--; }
+      this.send(from, encodeTunnellingAck({ channelId: ch.id, sequence: req.sequence, status }));
+    };
     if (req.sequence === ch.rxSeq) {
       ch.rxSeq = (ch.rxSeq + 1) & 0xff;
       ack();

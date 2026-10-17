@@ -310,7 +310,8 @@ export class KnxTunnelClient {
     f.timer = this.clock.setTimeout(() => {
       if (this.inFlight !== f) return;
       if (f.attempts < this.cfg.maxSendAttempts) { this.transmitFlight(f); return; }
-      this.shutdown("ack_timeout", new KnxTunnelError("ack_timeout", `no TUNNELLING_ACK for sequence ${f.sequence} after ${f.attempts} attempt(s); tunnel considered lost`));
+      // TUN §2.6.1: after the repeat, "terminate the connection by sending a DISCONNECT_REQUEST".
+      this.terminate("ack_timeout", new KnxTunnelError("ack_timeout", `no TUNNELLING_ACK for sequence ${f.sequence} after ${f.attempts} attempt(s); tunnel terminated`));
     }, this.cfg.ackTimeoutMs);
   }
 
@@ -382,21 +383,16 @@ export class KnxTunnelClient {
     const f = this.inFlight;
     if (!f || a.sequence !== f.sequence) { this.stats.staleAcks++; return; }
     if (f.timer) this.clock.clearTimeout(f.timer);
-    this.inFlight = null;
     this.stats.acksReceived++;
     if (a.status !== StatusCode.NO_ERROR) {
-      const err = new KnxTunnelError("ack_error", `gateway rejected frame: ${describeStatus(a.status)}`, a.status);
-      f.send.reject(err);
-      // 0x26/0x27: only this frame failed. Anything else (bad channel, sequence) means the
-      // session state is no longer trustworthy → recover by reconnecting.
-      if (a.status === StatusCode.DATA_CONNECTION || a.status === StatusCode.KNX_CONNECTION) {
-        this.txSeq = (this.txSeq + 1) & 0xff;
-        this.pump();
-      } else {
-        this.shutdown("ack_error", err);
-      }
+      // TUN §2.6.1: an ACK "signal[ling] any kind of error condition" is handled exactly like a missing
+      // ACK — repeat the request once with the same sequence, then terminate the connection.
+      if (f.attempts < this.cfg.maxSendAttempts) { this.transmitFlight(f); return; }
+      const err = new KnxTunnelError("ack_error", `gateway rejected frame ${f.sequence}: ${describeStatus(a.status)}`, a.status);
+      this.terminate("ack_error", err);
       return;
     }
+    this.inFlight = null;
     this.txSeq = (this.txSeq + 1) & 0xff;
     const now = this.clock.now();
     f.send.resolve({
@@ -531,6 +527,14 @@ export class KnxTunnelClient {
 
   /** Resolves when the session has fully closed (any reason). */
   whenClosed(): Promise<void> { return this.closedPromise; }
+
+  /** Spec-mandated teardown of a session whose frames cannot be delivered: tell the server, then close. */
+  private terminate(reason: CloseReason, error: KnxTunnelError): void {
+    if (this._state === "connected" && this.channelId !== null && this.target) {
+      this.transmit(encodeDisconnectRequest({ channelId: this.channelId, endpoint: NAT_HPAI }), this.target);
+    }
+    this.shutdown(reason, error);
+  }
 
   private shutdown(reason: CloseReason, error?: KnxTunnelError): void {
     if (this._state === "closed") return;
