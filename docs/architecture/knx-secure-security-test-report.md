@@ -153,3 +153,19 @@ Commit `4d3e5b9` (code/tests) + docs commit. Linux sandbox, Node 22, simulator +
 
 Mutation checks (each reverted): sequence check removed → 5 failures; counter advanced before MAC → 1; key-reuse guard removed → 1; TCP not released on refused start → 1 (found by adding a test after the first mutation run showed the original suite did not detect it);
 server replay check removed → 1. Pre-existing assertions unchanged. Conformance-vector tests: skipped without the local licensed file, executed (and passing) with it.
+
+## Addendum 6 — specification-verification gate (2026-10-18)
+Commit `6f85df1` (code/tests) + docs commit. Linux sandbox, Node 22, simulator + loopback only. **No hardware, no conformance run, no new specification documents.** Licensed vectors were available for the "with" rows.
+
+| Run | Passed | Failed | Skipped |
+|---|---|---|---|
+| `src/knx` before (`83aaa47`), with / without vectors | 811 / 789 | 0 / 0 | 0 / 22 |
+| `src/knx` after, **with** licensed vectors | **820** | 0 | 0 |
+| `src/knx` after, **without** vectors | **798** | 0 | **22** (spec-vector tests; reported separately) |
+| `src/knx/native/secure` with / without vectors | 152 / 130 | 0 / 0 | 0 / 22 |
+| `delivery-semantics.test.ts` (new) | 9 | 0 | 0 |
+| `stream-replay.test.ts` / `stream-tunnel.test.ts` | 14 / 27 | 0 | 0 |
+| classic: `tunnel-client` 37 + `wire` 11 + `udp-socket` 3 + `tcp-socket` 24 | 75 | 0 | 0 |
+| `tsc --noEmit`, `npm run build` | clean | — | — |
+
+New tests pin: stream receipt has exactly the session-level keys; receipt resolves although nothing executed; `confirmed` is interface-level; session counters move with no command; a late confirmation is counted while the receipt stays `not_confirmed`; guard refuses inside the window / ignores refused configs / has a documented limit. Mutation checks (reverted): counter increment removed → 1 failure; guard window enlarged → 1 failure. Pre-existing assertions unchanged; UDP golden traces unchanged.

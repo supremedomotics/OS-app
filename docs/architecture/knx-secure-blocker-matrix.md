@@ -244,3 +244,23 @@ None of the wire-visible stream decisions is unsupported; the real-transport blo
 
 **Replay/duplicate gap register (details: security review §10, architecture §9):** G-R1 held-back tail frames are accepted (no freshness in unicast wrappers; receive path unbounded on the client until B4); G-R2 application retries are new authenticated messages
 (at-least-once, only the caller can judge idempotence); G-R3 delivery outcome after a session loss is UNKNOWN. G-R4/G-R5 (key-pair reuse seam; TCP left open when `start()` refuses) were fixed (class I).
+
+## 8. Specification-verification gate (2026-10-18): document provenance and the exact next evidence per rule
+
+**Provenance corrections.** The chapter "KNXnet/IP **Core**" is **Chapter 3/8/2** (N: Tunnelling v01.07.01 reference [05]; IP Secure v01.01.02 reference [06]); "Overview" is **Chapter 3/8/1** (Tunnelling [04]; IP Secure [05]); Tunnelling states that the common constants and **common error codes are listed in the Overview** (Tunnelling lines on "valid KNXnet/IP common constants / error codes", N) — which fixes where B1's missing values live.
+The file name `03_08_02` is **derived** from the bundle's numbering pattern (03_08_04 = chapter 3/8/4, 03_08_09 = IP Secure); it has not been seen, so the exact file title/revision stays **unknown** — ask for "Chapter 3/8/2 KNXnet/IP Core, current Approved Standard". Tunnelling v01.07.01's change table records "AN184 KNXnet/IP Core v2 integrated" (2020.12.22): that integrates AN184 *into the Tunnelling chapter*; it does not provide the Core chapter. The archive was re-listed on 2026-10-18: still the same single 12-PDF bundle, nothing new uploaded.
+
+| Rule / blocker | Status | Next evidence that unblocks it (exact) | Where the answer must be recorded |
+|---|---|---|---|
+| `hpaiInConnectionFrames` (B3) | U | Core (3/8/2): clauses on the HPAI of CONNECT_REQUEST / CONNECTIONSTATE_REQUEST / DISCONNECT_REQUEST and the server's CONNECT_RESPONSE HPAI **when carried in a TCP connection**; the clause behind TSSK 2.5.21 ("UDP HPAI over TCP ignored"); TSSK 2.5.x Test IDs re-mapped to the *current* Core clause numbers | `STREAM_RULES.hpaiInConnectionFrames` → `{value, source}`; codec change + wire tests |
+| `connectionLiveness` (B4) | U | Core: whether CONNECTIONSTATE is the keep-alive on TCP and inside a secure session, what resets the server connection timeout, client duties when a response is missing; Overview §5.8 constants (`TimeoutKnxConnection`, response timeouts) with their values | rule → verified or "none required"; also decides the client inbound watchdog (G-R1) |
+| `disconnectAndSlotCleanup` (B5) | U | Core + Overview: is DISCONNECT_REQUEST required/confirmed before closing a session or TCP connection; effect on the tunnelling-address slot (Tunnelling §4.3 shows stale connections hold addresses); behaviour on a server-initiated DISCONNECT over TCP | rule + tests of slot release |
+| `statusCodes` (B1) | partly N | Overview (3/8/1) common error-code table: values of E_CONNECTION_ID, E_CONNECTION_TYPE, E_CONNECTION_OPTION, E_NO_MORE_CONNECTIONS, E_DATA_CONNECTION, E_KNX_CONNECTION (verified so far: E_NO_ERROR 00h, E_TUNNELLING_LAYER 29h, E_NO_MORE_UNIQUE_CONNECTIONS 25h) | `StatusCode` table in `knxnetip-frame.ts` + cross-check test per value |
+| `partialFrameTimeout` (B8) | U | Core: receive timeout for an incomplete frame (client side), idle TCP timeout (`TimeoutIdleTcpConnection`), which malformed headers are fatal, maximum frame a client must accept | `stream.ts` limits; slow-sender tests |
+| AN183 applicability (B2) | U (partial N-scope) | standalone AN183 "KNXnet/IP System Broadcast" (current), **or** written KNX statement that a group-telegram tunnelling client has no obligation under it | matrix B2 → closed / obligation list |
+| Password encoding (B6) | guarded | written KNX statement on encoding/normalisation, or the ETS keyring format (which may carry the hash directly) | remove `PASSWORD_ASCII_ONLY` or keep refusing |
+| Client serial (B9) | U | written KNX statement: serial source for software clients, uniqueness/validation rules | production session creation stays blocked |
+| Conformance claims | none possible | EITT test templates / client-side test procedure and certification requirements; TSSK re-baselined against IPS v01.01.02 | test report "conformance" column |
+| Retry/feedback inputs | design only | Volume 6 Profiles (device feedback conventions) for `settleTimeMs`/`freshness` defaults | `knx-secure-retry-policy-design.md` §9 |
+
+Nothing in this milestone changed a rule's status; the table fixes what each rule is waiting for. The next protocol implementation milestone starts only when the corresponding row's evidence is in hand and mapped to exact clauses and tests.

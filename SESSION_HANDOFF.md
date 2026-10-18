@@ -20,6 +20,13 @@ Tests run (no code change): secure 87 pass with local vectors / 65 + 22 skipped 
 (4 values altered) → 5 failures, copy deleted. Vectors remain outside Git (`knx-licensed/` ignored; none tracked). `knxultimate`, production registration, package.json, lockfile, flags, policy.ts unchanged.
 Next: obtain Core v2 + Overview + AN183 statement (answers to the 11 questions); then T1/T2; then T3/T4 in the simulator; hardware bench list in the architecture doc §6. No PR opened.
 
+## Session: KNX specification-verification gate (no new wire behaviour)
+
+Start HEAD `83aaa47` (clean). No new documents arrived (single 12-PDF bundle). Provenance fixed: Core = Chapter 3/8/2, Overview = Chapter 3/8/1 (named in Tunnelling/IP Secure reference lists; the Tunnelling chapter says the common error codes live in the Overview); `03_08_02` is an inferred file name; revisions unknown.
+`knx-secure-blocker-matrix.md` §8 lists the exact next evidence per rule. `security review §11` re-verifies the six replay distinctions against source with file:line + tests; sessions vs execution pinned (`delivery-semantics.test.ts`, evidence-level docs on `SendReceipt`/`sessionDiagnostics()`); new counter `unmatchedConfirmations`; key-pair seam renamed `unsafeGenerateKeyPairForTest`, guard preserved and its limits documented (process-local, 1 024 window, not RNG-state-duplication protection).
+Design added: `knx-secure-retry-policy-design.md` (categories A–G, evidence ladder, feedback requirements, never-retry B/C/D/G; no engine). Code `6f85df1`. `src/knx`: 820 with vectors / 798 + 22 skipped without. Production, `knxultimate`, lockfile, policy, flags untouched; stream link simulator-only.
+Next: obtain Core/Overview/AN183/EITT → map to clauses+tests → then (and only then) the next protocol milestone; independently, the S3 retry engine can be built from the design.
+
 ## Session: KNX Secure — specification re-inspection + replay-safety gate (no wire change)
 
 Start HEAD `3059eb3` (clean). Archive re-inspected: only the 12-PDF subset exists (no Core v2, Overview, standalone AN183, EITT, Resources, Volume 6, keyring format); MyKNX not reachable from the sandbox — exact pull list in `knx-secure-spec-acquisition.md` §D.

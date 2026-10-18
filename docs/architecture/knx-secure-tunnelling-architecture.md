@@ -128,3 +128,7 @@ Stream mode removes the only tunnel-layer duplicate mechanism (sequence + ACK + 
 * not provided by anything in the specification we hold: freshness of unicast wrappers (held-back tail frames), exactly-once intent across application retries, knowledge of the outcome after session loss;
 * required adapter contract (T5): treat `SendReceipt{transportAck:"none"}` as "handed to the session"; use `confirmation` for delivery; classify commands (idempotent-absolute vs everything else) before any automatic resend; never auto-resend locks/security/relative commands; surface `not_confirmed` as UNKNOWN.
 No change to the verified rules, no new wire field, no tunnel-layer sequence use. Real-transport use remains blocked by B1/B3/B4/B5/B8 (acquisition plan §D lists the documents).
+
+## 10. Delivery semantics and retry policy (2026-10-18)
+`SendReceipt` and `sessionDiagnostics()` report session-layer and interface-layer facts only (documented in code and pinned by `delivery-semantics.test.ts`). Whether and when to resend is **not** the tunnel's decision: the per-capability policy is specified in
+`knx-secure-retry-policy-design.md` (design only; categories A–G, evidence ladder L0–L3/U, never-retry classes B/C/D/G). The adapter contract of §9 stands. New observable: `TunnelDiagnostics.unmatchedConfirmations`. Nothing changed on the wire.
