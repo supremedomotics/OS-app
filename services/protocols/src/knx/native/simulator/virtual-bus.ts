@@ -64,6 +64,8 @@ export interface ActuatorFaults {
   stuck?: boolean;
   /** Never emits status writes or answers reads. */
   noFeedback?: boolean;
+  /** Answers GroupValueRead requests following this repeating pattern (true = answer, false = ignore); other behaviour is unaffected. Models an intermittent device. */
+  readResponsePattern?: boolean[];
   /** Status write is delayed by this many ms. */
   feedbackDelayMs?: number;
   /** Reports the opposite of its true state (wrong object flag / inverted mapping). */
@@ -90,6 +92,7 @@ export class VirtualActuator implements VirtualDevice {
   faults: ActuatorFaults = {};
   private _state: KnxValue;
   readonly received: BusTelegram[] = [];
+  private readCount = 0;
 
   constructor(private readonly cfg: ActuatorConfig, private readonly clock: Clock) {
     this._state = cfg.initial;
@@ -112,6 +115,8 @@ export class VirtualActuator implements VirtualDevice {
       try { this._state = decodeDpt(this.cfg.dpt, t.data); } catch { return; }
       this.publish(bus, "write");
     } else if (this.cfg.feedbackGa !== null && t.destination === this.cfg.feedbackGa && t.service === "read") {
+      const pat = this.faults.readResponsePattern;
+      if (pat && pat.length > 0 && !pat[this.readCount++ % pat.length]) return;
       this.publish(bus, "response");
     }
   }
