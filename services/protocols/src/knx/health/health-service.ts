@@ -37,6 +37,8 @@ export class KnxHealthService {
   private readonly manager: ConnectionManager;
   private readonly bus: ReadOnlyGroupBus;
   private tunnel: KnxTunnelClient | null = null;
+  /** The tunnel of an attempt still connecting; stop() clears it and a late success is then closed orderly instead of attached. */
+  private candidate: KnxTunnelClient | null = null;
   private detachers: Array<() => void> = [];
   private tunnelsCreated = 0;
   private lastReconcile: { at: number; report: ReconcileReport } | null = null;
@@ -80,6 +82,7 @@ export class KnxHealthService {
   /** Stops supervision, cancels pending probes, detaches and disconnects. Idempotent. */
   async stop(): Promise<void> {
     this.started = false;
+    this.candidate = null;                           // an attempt still connecting is not aborted (that would orphan a gateway channel); connectOnce closes its tunnel orderly when the handshake ends
     this.monitor.stop();
     await this.manager.stop();
     this.detach();
@@ -108,12 +111,16 @@ export class KnxHealthService {
     this.detach();                                   // never two attachments, whatever happened before
     const t = this.o.createTunnel();
     this.tunnelsCreated++;
+    this.candidate = t;
     try { await t.connect(); } catch (e) {
+      if (this.candidate === t) this.candidate = null;
       this.tracker.recordError(e instanceof Error ? e.message : String(e));
       const code = (e as { code?: string }).code;
       this.monitor.setPath({ interface: "down", gateway: code !== undefined && UNREACHABLE.has(code) ? "unreachable" : "unknown" });
       throw e;
     }
+    if (this.candidate !== t || !this.started) { void t.disconnect(); throw new Error("stopped while connecting"); }
+    this.candidate = null;
     this.tunnel = t;
     this.detachers.push(t.onTelegram((f) => {
       if (!f.destinationIsGroup || !f.group) return;

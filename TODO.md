@@ -8,11 +8,18 @@
 ## Critical
 
 ### KNX clean-room driver (replace `knxultimate`) — IN PROGRESS, production untouched
-- **Next KNX milestone:** native group read/write + feedback parity — plan in `docs/knx/knx-native-group-parity-plan.md` (health integration slice done: `health-service.ts`, simulator-tested). Open: gateway route/instantiation behind native flag, reconnect ownership decision.
+- **Native group read/write + `KnxConnection` parity — DONE in simulator (2026-10-18; see Completed):** `NativeTelegramBus`, `SupervisedTunnel`, `NativeKnxConnection`, shared contract suite, 121-test parity run, reconnect-ownership decision, shadow-mode design. **Open from it (in priority order):**
+  1. **Hardware (nothing here is H):** H-1 gateway reboot/power-loss recovery + dead-channel lifetime on a 1-slot gateway; H-2 abort during CONNECT_RESPONSE; H-3 real `KNXClient` for legacy findings D5–D8 and the legacy path after a gateway reboot; H-4 write → status-feedback round trip with a real actuator; H-5 high-rate traffic; H-6 real-device DPT 22.101/222.100/9.xxx decode (list: `knx-native-group-parity-plan.md` §9).
+  2. **Decide:** behavioural risk of cut-over — legacy records its own echoed command as *observed* state for `feedbackOnCommandAddress` bindings (D7); native never does, so such a device shows no observed state until it truly reports. Owner call before any flag flip.
+  3. **Driver seams (need an explicit go-ahead; production driver is frozen for this milestone):** optional `onLinkChange` on `KnxConnection` so `isConnected()` can show link-down; epoch in `KnxProtocolDriver.disconnect()` so an in-flight `connect()` cannot resurrect; optional tap in `wrapKnxUltimate` for shadow option B (`knx-reconnect-ownership.md` §5, `knx-shadow-mode-design.md` §3).
+  4. Move `KnxHealthService` onto `NativeKnxConnection`'s `onLinkUp` hook (one tunnel instead of two); share the read budget between `read()` and the monitor; route `SupremeKnxDriver.syncAll` through `read()` only after H-4.
+  5. Shadow mode build (tap → comparator → local report → lab-only guards) — design only today; never in a customer installation.
+  6. Production factory (uses `createSingleSlotConnectionFactory`) + flag consumer — **not started; do not do before 1–3**.
+  7. Run the gateway KNX e2e suites in a fully built workspace (still unloadable here); obtain the DPT specification text (D1 bit order, D2 field order, D3 invalid code are not V).
 - **Scope audit:** `docs/knx/knx-original-scope-audit.md` (18 requirements; next smallest step per row). **Health monitoring built (simulator-only)** in `src/knx/health/`: next = wire to ETS devices + supervisor, diagnostics endpoint, calibrate on real hardware; optional DeviceDescriptor probe needs cEMI individual frames + Transport Layer client.
-See `docs/architecture/knx-clean-room-parity-matrix.md` (stages, removal gates, defects D1–D4).
+See `docs/architecture/knx-clean-room-parity-matrix.md` (stages, removal gates, defects D1–D4; new legacy findings D5–D8 in `docs/knx/knx-native-group-parity-plan.md` §8).
 - Done: audit/matrix; native address/frame/cEMI/DPT codecs; tunnelling client; simulator foundation (simulator-validated only).
-- Next: telegram bus + provider/connection adapters behind a feature flag; supervisor + capability-aware replay
+- Next: ~~telegram bus + connection adapter~~ (done, simulator) → feature-flagged registration; capability-aware replay
   policy; Supreme KNX Health (gateway / device reachability / feedback) + troubleshooting engine; hardware-in-the-loop;
   only then remove `knxultimate` (code, manifest, lockfile via pnpm, image, SBOM; delete `dpt-differential.test.ts`).
 - Decide: fix D1/D2 (HVAC status/setpoints never decode with the real library) in the legacy path now, or let the native
@@ -2249,6 +2256,7 @@ See `docs/architecture/knx-clean-room-parity-matrix.md` (stages, removal gates, 
   ultrawide-display layout bug.
 - Project memory system established: `CLAUDE.md`, `PROJECT_CONTEXT.md`, `SESSION_HANDOFF.md`,
   `TODO.md` (this file).
+- **KNX native group communication + `KnxConnection` parity (2026-10-18, simulator-tested; NOT hardware-tested, NOT registered):** `native/telegram-bus.ts`, `supervised-tunnel.ts`, `knx-connection.ts`, `single-slot.ts`; shared contract suite (`native/simulator/knx-connection.contract.ts`, 78 cases over legacy + native); the 121 legacy driver tests pass unchanged on the native connection (`KNX_DRIVER_BUS=native`); reconnect ownership decided and documented; three decode differences classified; new legacy findings D5–D8; shadow-mode design; fixed a stale-tunnel/monitor defect in `KnxHealthService.stop()` and a stale-timer defect in the simulator's `kickChannel`; 18/18 injected mutations detected.
 
 
 - [x] Flutter sun line on Home and Spaces from the Hub-stored location.

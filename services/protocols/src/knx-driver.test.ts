@@ -1,13 +1,14 @@
 import type { DeviceId } from "@supreme/domain-model";
 import type { BackendStateEvent } from "@supreme/integration-layer";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { KnxProtocolDriver, type KnxConnection, type KnxValue } from "./knx-driver.js";
 import { decodeHeatCool, decodeHvacControllingMode, decodeHvacOperatingMode, decodeHvacSetpoints, decodeHvacStatus, encodeHeatCool, encodeHvacOperatingMode, encodeHvacSetpoints, stateFromValue, valueFromCommand } from "./knx-codec.js";
 import { Thermostat } from "@matter/main/clusters/thermostat";
 import { temperatureCommandForSystemMode } from "./matter-bridge/clusters/thermostat-control-adapter.js";
+import { disposeNativeDriverBuses, NativeDriverBus, type DriverBus } from "./knx/native/simulator/driver-parity-harness.js";
 
 /** A fake KNX bus: records group-writes and lets a test push status telegrams. */
-class FakeKnxBus implements KnxConnection {
+class LegacyFakeKnxBus implements KnxConnection {
   readonly writes: Array<{ ga: string; value: KnxValue; dpt: string }> = [];
   private readonly observers = new Map<string, (v: KnxValue) => void>();
   async connect() {}
@@ -26,6 +27,17 @@ class FakeKnxBus implements KnxConnection {
     this.observers.get(ga)?.(value);
   }
 }
+
+/**
+ * Native parity run (§ Clean-room KNX stack, Stage 4): the SAME tests, unchanged, against NativeKnxConnection tunnelling into the simulator.
+ *   KNX_DRIVER_BUS=native pnpm exec vitest run src/knx-driver.test.ts
+ * Default (unset) is the in-memory fake above, exactly as before. See docs/knx/knx-native-group-parity-plan.md for the three documented decode
+ * differences and the tests that cannot apply to a wire-level transport.
+ */
+const NATIVE_BUS = process.env.KNX_DRIVER_BUS === "native";
+const FakeKnxBus: new () => DriverBus = NATIVE_BUS ? NativeDriverBus : LegacyFakeKnxBus;
+type FakeKnxBus = DriverBus;
+afterEach(async () => { if (NATIVE_BUS) await disposeNativeDriverBuses(); });
 
 describe("KNX codec", () => {
   it("maps capabilities to DPT values and back", () => {

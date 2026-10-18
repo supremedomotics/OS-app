@@ -114,6 +114,8 @@ are untouched by this work.** Deployed use of each: Unknown.
 D1/D2 are fixed by construction in the native codec; they are **not** fixed in the legacy path
 (production behaviour deliberately untouched until the feature-flag stage).
 
+**Added 2026-10-18 (native group milestone, `docs/knx/knx-native-group-parity-plan.md` §7–§8):** D1–D3 classified (D1/D2 intentional, D3 specification-intended + legacy defect; none is V — no DPT text held). New legacy findings: **D5** a throwing observer aborts delivery to the others; **D6** observers survive `disconnect()`; **D7** the library echoes the client's own write to every observer (`echoed=true`, ignored by the wrapper) so a `feedbackOnCommandAddress` binding records its command as *observed* state; **D8** a GroupValueRead reaches observers as value 0/false. D5–D8 are asserted on both implementations in the contract suite; legacy evidence is library source + a modelled client, not a live bus.
+
 ## 4. Implementation stages
 
 | # | Stage | Status |
@@ -121,7 +123,7 @@ D1/D2 are fixed by construction in the native codec; they are **not** fixed in t
 | 1 | Audit + parity matrix | **done** (this document) |
 | 2 | Transport interfaces + deterministic harnesses | **done** (`transport.ts`, `udp-socket.ts`, `simulator/`) |
 | 3 | Framing | **done** (addresses, KNXnet/IP frames, cEMI) |
-| 4 | Tunnelling + group communication | **partial**: session client done (simulator-validated); still todo: telegram bus (multi-subscriber, per-handle unsubscribe, feedback attribution), GA-bound read/write facade, supervisor/reconnect with restored subscriptions |
+| 4 | Tunnelling + group communication | **done in simulator (2026-10-18)**: session client; `NativeTelegramBus` (multi-subscriber, per-handle unsubscribe — fixes D4 — source IA on every telegram); `SupervisedTunnel` (reconnect with subscriptions preserved; ownership in `docs/knx/knx-reconnect-ownership.md`); `NativeKnxConnection` (write/read/observe, 121 driver tests pass on it). **Not hardware-tested, not registered.** |
 | 5 | DPT parity | **done** for required set; gaps listed above |
 | 6 | Feature-flagged integration | todo |
 | 7 | Health diagnostics, troubleshooting, self-healing | todo |

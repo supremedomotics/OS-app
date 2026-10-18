@@ -516,7 +516,8 @@ interface KnxUltimateModule {
   dptlib?: KnxUltimateDptLib;
 }
 
-interface KnxUltimateClient {
+/** Exported for the shared KnxConnection contract suite only (knx/native/simulator/knx-connection.contract.ts); not part of the package API (index.ts does not re-export it). */
+export interface KnxUltimateClient {
   Connect(): void;
   Disconnect(): Promise<void>;
   write(groupAddress: string, value: KnxValue, dpt: string): void;
@@ -527,12 +528,12 @@ interface KnxUltimateClient {
   off(event: "error", cb: (err: unknown) => void): KnxUltimateClient;
 }
 
-interface KnxUltimateDptLib {
+export interface KnxUltimateDptLib {
   resolve(dpt: string): unknown;
   fromBuffer(raw: Buffer, dptConfig: unknown): KnxValue;
 }
 
-interface KnxUltimateIndication {
+export interface KnxUltimateIndication {
   cEMIMessage?: {
     dstAddress?: { toString(): string };
     npdu?: {
@@ -548,7 +549,7 @@ interface KnxUltimateObserver {
   handler: (value: KnxValue) => void;
 }
 
-function wrapKnxUltimate(client: KnxUltimateClient, dptlib: KnxUltimateDptLib): KnxConnection {
+export function wrapKnxUltimate(client: KnxUltimateClient, dptlib: KnxUltimateDptLib): KnxConnection {
   const observers = new Map<string, KnxUltimateObserver[]>();
   client.on("indication", (packet) => {
     const cemi = packet.cEMIMessage;

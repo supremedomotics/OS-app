@@ -104,8 +104,9 @@ export class VirtualKnxInterface {
     const ch = this.channels.get(id);
     if (!ch) return;
     this.send(ch.client, encodeDisconnectRequest({ channelId: id, endpoint: { protocol: 1, address: this.self.address, port: this.self.port } }));
-    // Real servers wait for a response; the model removes the channel after the same timeout.
-    this.clock.setTimeout(() => this.removeChannel(id), 5000);
+    // Real servers wait for a response; the model removes the channel after the same timeout — but only THAT channel: a client that reconnected
+    // meanwhile may have been given the same (lowest free) channel id, and must not be removed by this stale timer.
+    this.clock.setTimeout(() => { if (this.channels.get(id) === ch) this.removeChannel(id); }, 5000);
   }
 
   shutdown(): void {
