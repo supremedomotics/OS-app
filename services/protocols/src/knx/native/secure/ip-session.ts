@@ -55,8 +55,8 @@ export interface SecureSessionOptions {
   allowUnauthenticatedServer?: boolean;
   /** This client's 6-octet KNX serial number for the wrapper security information (§2.2.1.3.1). No default: it must be assigned. */
   serialNumber: Buffer;
-  /** Test seam: key-pair source (default: fresh CSPRNG pair, §2.2.3.1.1). */
-  generateKeyPair?: () => EcdhKeyPair;
+  /** TEST ONLY seam (production callers must never pass it — grep for "ForTest" in review): key-pair source; default is a fresh CSPRNG pair (§2.2.3.1.1). */
+  unsafeGenerateKeyPairForTest?: () => EcdhKeyPair;
   /** §2.2.3.6.1 / §2.2.3.8.1: client waits at most 10 s for the response / authentication status. */
   responseTimeoutMs?: number;
   authenticationTimeoutMs?: number;
@@ -68,7 +68,9 @@ export interface SecureSessionDiagnostics {
   state: SessionState;
   sessionId: number | null;
   serverAuthenticated: boolean | null;
+  /** Frames handed to the TCP stream (handshake, keep-alives and inner frames alike). Says nothing about delivery, device execution or state. */
   framesSent: number;
+  /** Authentic inbound wrappers accepted by this session layer (incl. status frames). Not command confirmations. */
   framesAccepted: number;
   discarded: {
     malformed: number; plainFrame: number; wrongSession: number; replay: number; macFailure: number; nested: number; unexpected: number; unauthenticatedState: number; reflected: number;
@@ -85,6 +87,12 @@ export interface SessionClosedEvent { reason: SessionCloseReason; status?: numbe
  * IPS §2.2.3.1.1 ("shall"): a NEW client key pair for every session. The generator seam makes reuse possible by mistake (a constant test pair, a stuck RNG);
  * reuse would give the same session key and counters restarting at 0 — every old wrapper would verify again. Refuse a public value already used by this process
  * (bounded memory; decision I — enforces the normative shall, adds no wire behaviour).
+ *
+ * SCOPE AND LIFETIME (what this guard is and is not): it catches reuse by a faulty/constant generator injected through the test seam, or a generator that repeats within
+ * the last USED_MAX sessions, inside ONE module instance of ONE process. It does NOT survive a process restart, a VM snapshot/restore or fork (a repeated RNG state after
+ * restore would produce a repeated pair undetected), a bundler/worker that loads a second copy of this module, or a repeat older than USED_MAX sessions. The security of
+ * fresh keys therefore still rests on the platform CSPRNG; the guard is a tripwire, not a replacement. Server-side key reuse is a server obligation (T: TSSK 2.2.35) and does
+ * not by itself reuse OUR session key, because X is fresh.
  */
 const usedClientPublics = new Set<string>();
 const USED_MAX = 1024;
@@ -156,7 +164,7 @@ export class SecureSessionClient {
     if (this.state !== "idle") throw new SecureSessionError("already_started", "a secure session is single-use (D2); create a new instance");
     const o = this.o;
     this.assertConfigured();
-    const kp = (o.generateKeyPair ?? generateEcdhKeyPair)();   // fresh pair per session, never reused (§2.2.3.1.1)
+    const kp = (o.unsafeGenerateKeyPairForTest ?? generateEcdhKeyPair)();   // fresh pair per session, never reused (§2.2.3.1.1)
     if (!claimClientPublic(kp.publicKey)) { kp.privateKey.wipe(); throw new SecureSessionError("invalid_option", "key pair reuse refused: a new ECDH key pair is required for every session (IPS §2.2.3.1.1)"); }
     this.kp = kp;
     this.transmit(encodeSessionRequest(this.kp.publicKey));

@@ -455,8 +455,8 @@ describe("start() refusal releases the connection", () => {
   it("a refused key-pair reuse leaves no open TCP connection even if the caller never calls close()", async () => {
     const kp = generateEcdhKeyPair(); const raw = kp.privateKey.use((b) => Buffer.from(b));
     const reuse = () => ({ publicKey: kp.publicKey, privateKey: new Secret(raw) });
-    const a = client({ generateKeyPair: reuse }); await open(a); a.close(); await clock.advance(20);
-    const b = client({ generateKeyPair: reuse });
+    const a = client({ unsafeGenerateKeyPairForTest: reuse }); await open(a); a.close(); await clock.advance(20);
+    const b = client({ unsafeGenerateKeyPairForTest: reuse });
     const p = b.connect(); const e = expect(p).rejects.toMatchObject({ code: "invalid_option" });
     await clock.advance(50); await e;
     expect(net.openConnections).toBe(0);                  // asserted BEFORE the global cleanup gate calls close()

@@ -100,8 +100,14 @@ export type SendReceipt = (
   /** Tunnel sequence number used (UDP: the one the gateway acknowledged; stream: always 0). */
   sequence: number;
   attempts: number;
-  /** Never rejects. `confirmed` = L_Data.con without error; `bus_error` = L_Data.con with the
-   * error flag; `not_confirmed` = no matching L_Data.con arrived in time (or session ended). */
+  /**
+   * Never rejects. EVIDENCE LEVELS — none of them says a device executed the command or reached the intended state:
+   *   resolved receipt, transportAck "none"  = the secure session accepted the frame (stream mode; written to TCP, nothing more)
+   *   resolved receipt, transportAck "ack"   = the gateway acknowledged the frame (UDP)
+   *   `confirmed`     = an L_Data.con without error arrived: the interface reports the telegram was sent on the KNX line
+   *   `bus_error`     = L_Data.con with the error flag
+   *   `not_confirmed` = no matching L_Data.con in time, or the session/tunnel ended first: the outcome is UNKNOWN (it may still execute later)
+   * Device execution / resulting state is evidenced only by status feedback from the device (see docs/architecture/knx-secure-retry-policy-design.md). */
   confirmation: Promise<ConfirmationOutcome>;
 };
 
@@ -110,6 +116,8 @@ export interface TunnelDiagnostics {
   link: "datagram" | "secure-stream";
   /** TUNNELLING_ACK frames received and ignored in stream mode (TUN §2.6.2). */
   ignoredAcks: number;
+  /** L_Data.con for a group telegram with no pending send (typically one that arrived after `not_confirmed` was reported). Evidence that an "unknown" outcome later resolved. */
+  unmatchedConfirmations: number;
   channelId: number | null;
   assignedAddress: number | null;
   gateway: string;
@@ -235,7 +243,7 @@ export class KnxTunnelClient {
     };
     this.closedPromise = new Promise<void>((r) => { this.resolveClosed = r; });
     this.stats = {
-      state: "idle", link: this.link.kind, ignoredAcks: 0, channelId: null, assignedAddress: null, gateway: `${opts.host}:${this.port}`, connectLatencyMs: null,
+      state: "idle", link: this.link.kind, ignoredAcks: 0, unmatchedConfirmations: 0, channelId: null, assignedAddress: null, gateway: `${opts.host}:${this.port}`, connectLatencyMs: null,
       heartbeat: { sent: 0, failures: 0, lastRttMs: null, lastOkAt: null },
       framesSent: 0, framesReceived: 0, telegramsDelivered: 0, acksReceived: 0, sendRetries: 0, staleAcks: 0,
       duplicateInbound: 0, outOfOrderInbound: 0, foreignDatagrams: 0, wrongChannel: 0, unexpectedServices: 0, undecodedGroupTelegrams: 0, listenerErrors: 0,
@@ -500,7 +508,8 @@ export class KnxTunnelClient {
   private onConfirmation(c: CemiFrame): void {
     if (!c.destinationIsGroup || !c.group) return;
     const entry = this.confirmations.find((p) => p.destination === c.destination && p.service === c.group!.service);
-    entry?.settle(c.confirmError ? "bus_error" : "confirmed");
+    if (!entry) { this.stats.unmatchedConfirmations++; return; }            // e.g. arrived after "not_confirmed" was reported: the earlier outcome was UNKNOWN, not "failed"
+    entry.settle(c.confirmError ? "bus_error" : "confirmed");
   }
 
   // -------------------------------------------------------------------------------------

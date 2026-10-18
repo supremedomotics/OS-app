@@ -27,7 +27,8 @@ export class SecureStreamTunnelLink implements TunnelLink {
     await conn.connect();   // rejects with SecureSessionError on any handshake/transport failure; nothing is sent in the clear
   }
 
-  /** Counters and state of the underlying secure session (never secrets); null before open, the final snapshot after close. */
+  /** Counters and state of the underlying secure session (never secrets); null before open, the final snapshot after close.
+   * Session-layer facts only: `framesSent` = frames written to TCP, `framesAccepted` = authentic inbound wrappers. NOT evidence that a command was delivered, executed or confirmed. */
   sessionDiagnostics() { return this.conn?.diagnostics() ?? this.finalDiagnostics; }
 
   send(frame: Buffer): void { this.conn?.sendInner(frame); }

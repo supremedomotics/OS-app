@@ -212,8 +212,8 @@ describe("D. reconnect and new-session behaviour", () => {
   it("a client key pair may not be reused across sessions (IPS §2.2.3.1.1): the second session is refused and its TCP connection released", async () => {
     const kp = generateEcdhKeyPair(); const raw = kp.privateKey.use((b) => Buffer.from(b));
     const reuse = () => ({ publicKey: kp.publicKey, privateKey: new Secret(raw) });
-    const a = await up({ generateKeyPair: reuse }); await a.t.disconnect(); await clock.advance(20);
-    const link = new SecureStreamTunnelLink(opts({ generateKeyPair: reuse }));
+    const a = await up({ unsafeGenerateKeyPairForTest: reuse }); await a.t.disconnect(); await clock.advance(20);
+    const link = new SecureStreamTunnelLink(opts({ unsafeGenerateKeyPairForTest: reuse }));
     const t = new KnxTunnelClient({ host: GW, link, clock }); tunnels.push(t);
     const p = t.connect(); const e = expect(p).rejects.toMatchObject({ code: "socket_error" });
     await clock.advance(100); await e;
