@@ -7,7 +7,7 @@
 import type { Clock, TimerHandle } from "../native/transport.js";
 import { parseGroupAddress, parseIndividualAddress } from "../native/address.js";
 import {
-  activeCapability, DEFAULT_HEALTH_CONFIG, evaluateDevice,
+  activeCapability, DEFAULT_HEALTH_CONFIG, evaluateDevice, isFresh,
   type ActiveCheckCapability, type BusCommunication, type Confidence, type DeviceRecord, type EvidenceKind, type GatewayReachability,
   type HealthConfig, type HealthReason, type HealthState, type InterfaceConnectivity, type PathObservation,
 } from "./health-model.js";
@@ -23,6 +23,8 @@ export interface MonitoredDeviceInput {
   individualAddress: number | null;
   statusGroups?: number[];
   activeCheck?: "allowed" | "disabled";
+  /** Opaque, integrator-supplied CONFIGURATION metadata (e.g. ETS object flags). Stored and returned verbatim; never mixed with evidence. */
+  meta?: unknown;
 }
 
 export interface ObservedTelegram { source: number; destination: number; service: "read" | "response" | "write" }
@@ -43,6 +45,13 @@ export interface DeviceHealth {
   activeCheck: ActiveCheckCapability;
   lastCheck: DeviceRecord["lastCheck"];
   nextCheckAt: number | null;
+  statusGroups: number[];
+  /** Configuration metadata exactly as registered (kept separate from the evidence fields above). */
+  meta: unknown;
+  lastTransition: { at: number; from: string; to: string } | null;
+  /** True when the device has evidence but it is older than its freshness window (so the state no longer rests on it). */
+  stale: boolean;
+  evidenceAgeMs: number | null;
 }
 
 export interface HealthLoad {
@@ -56,6 +65,9 @@ export interface HealthLoad {
   maxConcurrentObserved: number;
   /** Checkable devices that are due but not recently heard right now: persistently high ⇒ the fleet does not fit the configured probe budget (devices will age to `stale_evidence`). */
   overdueChecks: number;
+  /** Telegrams passed to the monitor (any source) and those attributed to a registered device by source address. */
+  telegramsObserved: number;
+  telegramsAttributed: number;
 }
 
 export interface HealthSnapshot {
@@ -80,6 +92,8 @@ interface Entry {
   checking: boolean;
   last: HealthState;
   lastReason: HealthReason;
+  meta: unknown;
+  lastTransition: { at: number; from: string; to: string } | null;
 }
 
 interface Pending { deviceId: string; ga: number; sentAt: number; settle: (latency: number | null) => void }
@@ -108,7 +122,7 @@ export class KnxHealthMonitor {
   private readonly log: HealthEvent[] = [];
   private readonly listeners = new Set<(e: HealthEvent) => void>();
   private lastPathKey = "";
-  private readonly load: HealthLoad = { checksStarted: 0, readsSent: 0, checksSucceeded: 0, checksFailed: 0, checksInconclusive: 0, ticksSuspended: 0, ticksDeferredForControlTraffic: 0, maxConcurrentObserved: 0, overdueChecks: 0 };
+  private readonly load: HealthLoad = { checksStarted: 0, readsSent: 0, checksSucceeded: 0, checksFailed: 0, checksInconclusive: 0, ticksSuspended: 0, ticksDeferredForControlTraffic: 0, maxConcurrentObserved: 0, overdueChecks: 0, telegramsObserved: 0, telegramsAttributed: 0 };
 
   constructor(private readonly clock: Clock, private readonly bus: ReadOnlyGroupBus, config: Partial<HealthConfig> = {}) {
     this.cfg = { ...DEFAULT_HEALTH_CONFIG, ...config };
@@ -131,10 +145,59 @@ export class KnxHealthMonitor {
       proven: false, consecutiveFailures: 0, ring: [], lastCheck: null,
     };
     // deterministic stagger so a fleet registered together does not probe together
-    const entry: Entry = { rec, nextCheckAt: now + (hash(input.deviceId) % this.cfg.checkIntervalMs), checking: false, last: "unknown", lastReason: "not_monitored" };
+    const entry: Entry = { rec, nextCheckAt: now + (hash(input.deviceId) % this.cfg.checkIntervalMs), checking: false, last: "unknown", lastReason: "not_monitored", meta: input.meta ?? null, lastTransition: null };
     this.devices.set(input.deviceId, entry);
     this.reevaluate(entry);
   }
+
+  /**
+   * Applies new CONFIGURATION to a registered device. Evidence policy (docs/knx/knx-device-health-design.md §8): evidence is attributed by source
+   * address, so a changed individual address resets all evidence; otherwise evidence is kept, and `proven` survives only while at least one of the
+   * previous status groups is still a status group. Returns whether evidence was kept.
+   */
+  reconfigureDevice(input: MonitoredDeviceInput): { evidenceKept: boolean } {
+    const e = this.devices.get(input.deviceId);
+    if (!e) throw new Error(`device ${input.deviceId} is not registered`);
+    const r = e.rec;
+    const newIa = input.individualAddress;
+    if (newIa !== null && (!Number.isInteger(newIa) || newIa < 0 || newIa > 0xffff)) throw new Error("individualAddress out of range");
+    if (newIa !== r.individualAddress && newIa !== null && this.byIa.has(newIa)) throw new Error(`individual address already monitored as ${this.byIa.get(newIa)}`);
+    const iaChanged = newIa !== r.individualAddress;
+    if (iaChanged) {
+      for (const p of [...this.pending]) if (p.deviceId === r.deviceId) { this.pending.delete(p); p.settle(null); }
+      if (r.individualAddress !== null) this.byIa.delete(r.individualAddress);
+      if (newIa !== null) this.byIa.set(newIa, r.deviceId);
+      r.individualAddress = newIa;
+      r.lastSeenAt = null; r.lastSeenKind = null; r.lastResponseAt = null; r.lastResponseLatencyMs = null;
+      r.proven = false; r.consecutiveFailures = 0; r.ring = []; r.lastCheck = null;
+    }
+    const next = [...(input.statusGroups ?? [])];
+    if (!iaChanged && !r.statusGroups.some((g) => next.includes(g))) r.proven = false;
+    if (!iaChanged && r.statusGroups.join() !== next.join()) { r.consecutiveFailures = 0; r.ring = []; }   // failures were failures of the OLD objects
+    r.statusGroups = next;
+    r.activeCheck = input.activeCheck ?? "allowed";
+    e.meta = input.meta ?? null;
+    this.reevaluate(e);
+    return { evidenceKept: !iaChanged };
+  }
+
+  /** Renames a registration (e.g. an ETS device id changed while the physical address stayed the same) keeping all evidence. */
+  rekeyDevice(oldId: string, newId: string): void {
+    const e = this.devices.get(oldId);
+    if (!e) throw new Error(`device ${oldId} is not registered`);
+    if (this.devices.has(newId)) throw new Error(`device ${newId} already registered`);
+    this.devices.delete(oldId);
+    e.rec.deviceId = newId;
+    this.devices.set(newId, e);
+    if (e.rec.individualAddress !== null) this.byIa.set(e.rec.individualAddress, newId);
+    for (const p of this.pending) if (p.deviceId === oldId) p.deviceId = newId;
+  }
+
+  registeredDevices(): Array<{ deviceId: string; individualAddress: number | null; statusGroups: number[]; activeCheck: "allowed" | "disabled"; meta: unknown }> {
+    return [...this.devices.values()].map((e) => ({ deviceId: e.rec.deviceId, individualAddress: e.rec.individualAddress, statusGroups: [...e.rec.statusGroups], activeCheck: e.rec.activeCheck, meta: e.meta }));
+  }
+
+  get isRunning(): boolean { return this.running; }
 
   unregisterDevice(deviceId: string): void {
     const e = this.devices.get(deviceId);
@@ -157,12 +220,14 @@ export class KnxHealthMonitor {
   /** Telegram received from the line (group services). Passive evidence + response matching. */
   observeTelegram(t: ObservedTelegram): void {
     const now = this.clock.now();
+    this.load.telegramsObserved++;
     this.lastBusOkAt = now;                       // the line carries traffic; a degraded verdict from OUR failed sends no longer stands
     this.busErrors = 0;
     const id = this.byIa.get(t.source);
     if (id === undefined) return;
     const e = this.devices.get(id);
     if (!e) return;
+    this.load.telegramsAttributed++;
     if (t.service === "response" && e.rec.statusGroups.includes(t.destination)) e.rec.proven = true;   // it answers reads on that object
     let latency: number | null = null;
     for (const p of [...this.pending]) {
@@ -236,6 +301,8 @@ export class KnxHealthMonitor {
         lastSeenAt: e.rec.lastSeenAt, lastSeenKind: e.rec.lastSeenKind, lastResponseAt: e.rec.lastResponseAt, lastResponseLatencyMs: e.rec.lastResponseLatencyMs,
         consecutiveFailures: e.rec.consecutiveFailures, checkMethod: cap === "candidate" || cap === "proven" ? "group_read" : "passive_only",
         activeCheck: cap, lastCheck: e.rec.lastCheck ? { ...e.rec.lastCheck } : null, nextCheckAt: this.checkable(e) ? e.nextCheckAt : null,
+        statusGroups: [...e.rec.statusGroups], meta: e.meta, lastTransition: e.lastTransition ? { ...e.lastTransition } : null,
+        stale: e.rec.lastSeenAt !== null && !isFresh(e.rec, now, this.cfg), evidenceAgeMs: e.rec.lastSeenAt === null ? null : now - e.rec.lastSeenAt,
       };
     }).sort((a, b) => (a.deviceId < b.deviceId ? -1 : 1));
     const overdue = [...this.devices.values()].filter((e) => this.checkable(e) && now >= e.nextCheckAt && !this.recentlyHeard(e, now)).length;
@@ -353,7 +420,9 @@ export class KnxHealthMonitor {
   private reevaluate(e: Entry): void {
     const ev = evaluateDevice(e.rec, this.clock.now(), this.currentPath(), this.cfg);
     if (ev.state !== e.last || ev.reason !== e.lastReason) {
-      this.emit({ at: this.clock.now(), kind: "state_change", deviceId: e.rec.deviceId, from: `${e.last}/${e.lastReason}`, to: `${ev.state}/${ev.reason}`, reason: ev.reason });
+      const at = this.clock.now();
+      this.emit({ at, kind: "state_change", deviceId: e.rec.deviceId, from: `${e.last}/${e.lastReason}`, to: `${ev.state}/${ev.reason}`, reason: ev.reason });
+      e.lastTransition = { at, from: `${e.last}/${e.lastReason}`, to: `${ev.state}/${ev.reason}` };
       e.last = ev.state; e.lastReason = ev.reason;
     }
   }

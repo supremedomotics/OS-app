@@ -54,6 +54,11 @@ export interface ConnectionManagerOptions {
   /** Injectable for tests — never Date.now()/setTimeout directly, so backoff/heartbeat
    * timing is deterministic under vi.useFakeTimers(). */
   now?: () => number;
+  /** Optional injectable timer source for the RECONNECT timer (the native stack's `Clock`, so simulators with a manual clock drive reconnects
+   * deterministically). Absent = the global `setTimeout`, i.e. exactly the previous behaviour. The heartbeat interval always uses the global timer. */
+  clock?: { setTimeout(fn: () => void, ms: number): unknown; clearTimeout(handle: never): void; now(): number };
+  /** Injectable jitter source (0..1); default `Math.random`. */
+  random?: () => number;
   onStateChange?: (state: ConnectionState, previous: ConnectionState, reason: string) => void;
 }
 
@@ -64,7 +69,7 @@ export class ConnectionManager {
   private readonly now: () => number;
 
   private connectionState: ConnectionState = "disconnected";
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  private reconnectTimer: unknown = null;
   private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
   private backoffMs: number;
   private stopped = true;
@@ -84,7 +89,7 @@ export class ConnectionManager {
 
   constructor(opts: ConnectionManagerOptions) {
     this.opts = opts;
-    this.now = opts.now ?? (() => Date.now());
+    this.now = opts.now ?? (opts.clock ? () => opts.clock!.now() : () => Date.now());
     this.backoffMs = opts.minBackoffMs ?? DEFAULTS.minBackoffMs;
   }
 
@@ -206,18 +211,20 @@ export class ConnectionManager {
     this.clearReconnectTimer();
     if (this.stopped) return;
     const maxBackoff = this.opts.maxBackoffMs ?? DEFAULTS.maxBackoffMs;
-    const jitter = 1 + (Math.random() * 0.2 - 0.1); // ±10%, avoids a reconnect-storm across many devices on the same outage
+    const jitter = 1 + ((this.opts.random ?? Math.random)() * 0.2 - 0.1); // ±10%, avoids a reconnect-storm across many devices on the same outage
     const delay = Math.min(maxBackoff, Math.round(this.backoffMs * jitter));
-    this.reconnectTimer = setTimeout(() => {
+    const fire = (): void => {
       this.reconnectTimer = null;
       void this.attemptConnect(reason);
-    }, delay);
+    };
+    this.reconnectTimer = this.opts.clock ? this.opts.clock.setTimeout(fire, delay) : setTimeout(fire, delay);
     this.backoffMs = Math.min(maxBackoff, this.backoffMs * 2);
   }
 
   private clearReconnectTimer(): void {
     if (this.reconnectTimer) {
-      clearTimeout(this.reconnectTimer);
+      if (this.opts.clock) this.opts.clock.clearTimeout(this.reconnectTimer as never);
+      else clearTimeout(this.reconnectTimer as ReturnType<typeof setTimeout>);
       this.reconnectTimer = null;
     }
   }

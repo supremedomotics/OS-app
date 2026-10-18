@@ -8,6 +8,7 @@
 ## Critical
 
 ### KNX clean-room driver (replace `knxultimate`) — IN PROGRESS, production untouched
+- **Next KNX milestone:** native group read/write + feedback parity — plan in `docs/knx/knx-native-group-parity-plan.md` (health integration slice done: `health-service.ts`, simulator-tested). Open: gateway route/instantiation behind native flag, reconnect ownership decision.
 - **Scope audit:** `docs/knx/knx-original-scope-audit.md` (18 requirements; next smallest step per row). **Health monitoring built (simulator-only)** in `src/knx/health/`: next = wire to ETS devices + supervisor, diagnostics endpoint, calibrate on real hardware; optional DeviceDescriptor probe needs cEMI individual frames + Transport Layer client.
 See `docs/architecture/knx-clean-room-parity-matrix.md` (stages, removal gates, defects D1–D4).
 - Done: audit/matrix; native address/frame/cEMI/DPT codecs; tunnelling client; simulator foundation (simulator-validated only).

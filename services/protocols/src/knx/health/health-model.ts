@@ -108,7 +108,7 @@ export function activeCapability(d: DeviceRecord): ActiveCheckCapability {
   return d.proven ? "proven" : "candidate";
 }
 
-const fresh = (d: DeviceRecord, now: number, c: HealthConfig): boolean => {
+export const isFresh = (d: DeviceRecord, now: number, c: HealthConfig): boolean => {
   if (d.lastSeenAt === null) return false;
   const win = d.lastSeenKind === "active_response" ? c.activeFreshnessMs : c.passiveFreshnessMs;
   return now - d.lastSeenAt <= win;
@@ -120,7 +120,7 @@ export function evaluateDevice(d: DeviceRecord, now: number, path: PathObservati
   if (path.gateway === "unknown" || path.interface === "unknown") return { state: "unknown", confidence: "none", reason: "path_unknown" };
   if (path.bus === "degraded") return { state: "unknown", confidence: "low", reason: "bus_degraded" };
 
-  const freshEv = fresh(d, now, c);
+  const freshEv = isFresh(d, now, c);
   const silentFor = d.lastSeenAt === null ? Number.POSITIVE_INFINITY : now - d.lastSeenAt;
   if (d.proven && d.consecutiveFailures >= c.offlineAfterFailures && silentFor >= c.offlineMinSilenceMs) {
     return { state: "offline", confidence: "high", reason: "active_checks_failed" };

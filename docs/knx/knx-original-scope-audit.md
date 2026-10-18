@@ -10,7 +10,7 @@
 Every row was checked by reading the cited file and counting the tests that exercise it. A feature is **Implemented** only with working behaviour *and* tests; a type, a doc mention or a simulator that accepts a message is not enough.
 Status: **Implemented** · **Partial** · **Not implemented** · **Blocked** (by missing specification/hardware/data). Evidence (highest reached): **U** unit-tested · **S** simulator-tested · **V** specification-verified (worked examples or clause-level read of a supplied normative text) · **H** real-hardware-tested.
 **H has not been reached by any requirement: no KNX IP interface, router, bus or device was available to this project at any point.** Production today = the legacy `KnxProtocolDriver` over `knxultimate`; the native stack is not wired to production (flags parser only).
-Test counts below are from this session's runs (`@supreme/protocols`: `src/knx` 876 pass with licensed vectors / 854 pass + 22 skipped without (820/798+22 before the health milestone); `@supreme/commissioning` KNX: 97 pass). The `@supreme/gateway` KNX e2e suites (9 files) **could not be loaded in this sandbox** (`Failed to load url @supreme/protocols` — workspace dependency packages are not built here); they were last reported green in earlier sessions and are **not re-verified now**.
+Test counts below are from this session's runs (`@supreme/protocols`: `src/knx` 896 pass with licensed vectors / 874 pass + 22 skipped without (876/854+22 before the integration slice, 820/798+22 before the health milestone); `@supreme/commissioning` KNX: 97 pass). The `@supreme/gateway` KNX e2e suites (9 files) **could not be loaded in this sandbox** (`Failed to load url @supreme/protocols` — workspace dependency packages are not built here); they were last reported green in earlier sessions and are **not re-verified now**.
 
 ## 1. Requirement table (summary)
 
@@ -18,7 +18,7 @@ Test counts below are from this session's runs (`@supreme/protocols`: `src/knx` 
 |---|---|---|---|---|
 | 1 | Gateway discovery + manual configuration | Implemented (classic) | U | own `node:dgram` SEARCH; manual host/port via env and driver config |
 | 2 | Gateway identity/IP/port/IA/capabilities | Partial | U | IA, name, MAC, multicast, tunnelling/routing flags; no manufacturer, serial, secure families, tunnel-slot info |
-| 3 | Gateway connectivity + lifecycle | Partial | S (native) / library (prod) | native tunnel client complete in simulator + loopback UDP; prod relies on `knxultimate` + gateway retry |
+| 3 | Gateway connectivity + lifecycle | Partial | S (native) / library (prod) | native tunnel client complete in simulator + loopback UDP; **a supervised native tunnel now exists inside the health service** (`ConnectionManager` + fresh client per attempt); prod relies on `knxultimate` + gateway retry |
 | 4 | Device health checks / pinging | **Not implemented before this milestone** → now **Partial**: passive + bounded GroupValueRead checks | S | simulator only; wiring to drivers/ETS not done |
 | 5 | Online/offline/degraded/unknown with evidence + confidence | **Not implemented before** → now Partial | S | `confidence-engine.ts` scores *import mapping*, unrelated |
 | 6 | GA read/write/response + live telegram monitoring | Partial | U/S | prod: write + declared-feedback observe only; reads/monitoring in provider + native client |
@@ -26,10 +26,10 @@ Test counts below are from this session's runs (`@supreme/protocols`: `src/knx` 
 | 8 | Physical-address / individual-device management | **Not implemented** | – | no A_IndividualAddress_*/management code anywhere |
 | 9 | KNX IP Secure | **Blocked** (components done) | V (crypto) + S | session client, frames, CCM, TCP socket verified; tunnelling over it simulator-only; Core/Overview/AN183/EITT missing |
 | 10 | KNX Data Secure | **Blocked / Not implemented** | V (CCM primitive only) | Resources chapter and keyring format absent |
-| 11 | ETS project import | Implemented | U (+ e2e earlier) | `.knxproj`, ESF, GA-export; real-ETS-file coverage unknown |
+| 11 | ETS project import | Implemented | U (+ e2e earlier) | `.knxproj`, ESF, GA-export; real-ETS-file coverage unknown; **now also feeds health registration with explicit eligibility/ambiguity reporting and re-import reconciliation** |
 | 12 | Device/entity creation + SupremeOS mapping | Implemented | U | unified mapper, capability mapper, rooms, duplicates |
 | 13 | Two-way sync + stale-state handling | Partial | U | feedback attribution + provenance done; no staleness/freshness model for entity state |
-| 14 | Diagnostics, history, actionable errors | Partial | U | counters + last-telegram snapshot + feedback diagnostics; no troubleshooting engine, no event history |
+| 14 | Diagnostics, history, actionable errors | Partial | U/S | counters + last-telegram snapshot + feedback diagnostics; **health diagnostics document with bounded event log and human reasons (simulator)**; no troubleshooting engine, no persisted history |
 | 15 | Safe recovery / reconnection / self-healing | Partial | U/S | backoff manager (commissioning provider only), offline queue (uniform TTL), native client single-use; no supervisor/self-healing engine |
 | 16 | Auth, key management, privacy, local-only | Partial | U/V | key store, redaction, unlock providers verified; keyring import blocked; TPM unvalidated |
 | 17 | Regression compatibility | Partial | U | legacy path untouched; protocols/commissioning suites green; gateway e2e not re-run |
@@ -61,8 +61,9 @@ Notation: **Files** are repository-relative; **Tests** give file (count). "Next"
 * **Now:** `services/protocols/src/knx/health/` — `health-model.ts` (pure rules), `health-monitor.ts` (evidence collection, bounded active GroupValueRead checks, load control), `tunnel-health-adapter.ts` (native tunnel client → monitor, read-only bus port). Design, evidence classes and rule table: `docs/knx/knx-device-health-design.md`.
 * **Mechanisms actually used:** passive telegram whose source address is the device (N for individual/broadcast services, I for group frames — cEMI chapter not supplied); active GroupValueRead of the device's own readable status object (AL v02.01.01 §3.1.2: a response is *optional*, so silence proves nothing). Not used: ICMP, A_DeviceDescriptor_Read (connection-oriented only mandatory; needs the Transport Layer client and individually-addressed cEMI — deferred).
 * **Tests:** `health-model.test.ts` (14), `health-monitor.test.ts` (33), `health-simulator.test.ts` (9) = 56; mutation-checked (9 rule/limit mutations each failed named tests). **Evidence: S.** No real gateway or device.
-* **Gaps:** not wired to any driver, gateway route or UI; no ETS-driven registration beyond a structural helper (`monitoredDeviceFromEts`); no persistence of health history; secure installations: probing disabled by flag (no Data Secure support).
-* **Next:** register devices from the ETS import + supervisor-managed tunnel (reconnect re-attaches the monitor); expose `snapshot()`/events through a diagnostics endpoint.
+* **Integration slice (2026-10-18):** ETS import → registrations (`ets-registry.ts`, real `parseEtsProject` in tests) → `ConnectionManager`-supervised fresh native tunnel (`health-service.ts`) → monitor → `knx.health.diagnostics.v1` (`health-diagnostics.ts`); 76 health tests total (integration 20), simulator-tested; see design §8.
+* **Gaps:** the service is not instantiated by any production code, gateway route or UI; no persistence of health history; Data Secure devices are only passively observed; ownership of reconnects vs the gateway's own driver retry is undecided.
+* **Next:** gateway diagnostics route + service instantiation behind the native flag; then the native group read/write parity plan (`knx-native-group-parity-plan.md`).
 
 ### 5. Online / offline / degraded / unknown with evidence and confidence — Partial (same milestone)
 `health-model.ts` `evaluateDevice` implements the ordered rule table (12 rules) with `state`, `confidence` (high/medium/low/none) and a `reason` code; `DeviceHealth` records `lastSeenAt`, `lastSeenKind`, `lastResponseAt`, latency, `consecutiveFailures`, `checkMethod`, `lastCheck`, `nextCheckAt`; a bounded event log records every transition. `offline` requires: repeated conclusive active failures + prior proof the device answers reads + a long silence window + a healthy path. Evidence **S**; thresholds are decisions (I), configurable, not specification values.
