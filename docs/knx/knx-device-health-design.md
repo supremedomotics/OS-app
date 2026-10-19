@@ -113,3 +113,6 @@ Files: `health/ets-registry.ts` (ETS model → registrations, reconciliation), `
 
 ## 9. Addendum 2026-10-19 — attaching to the connection's own tunnel (simulator-tested)
 `KnxHealthService` (§8) owns a private tunnel and must never be instantiated next to a `NativeKnxConnection` on a one-slot gateway. The production-shaped integration is `health/native-health-attachment.ts`: it takes `NativeKnxConnection`'s `onLinkUp` hook, opens no tunnel, owns one wildcard bus subscription and the monitor instance, probes only through `ctx.reads` (GroupValueRead only, shared `ReadBudget`, refused on an observe-only connection) and cleans up on every link-down. Ownership table, tests and limits: `knx-native-group-parity-plan.md` §10.2. Still unwired; thresholds uncalibrated; no hardware.
+
+## 10. Addendum 2026-10-20 — lifecycle contract
+`health/native-health-factory.ts` fixes the owner and lifecycle of the connection + attachment pair (parity plan §11); the attachment gained `dispose()` and per-link cleanup tokens. Still unwired; no hardware.

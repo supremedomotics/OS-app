@@ -576,7 +576,7 @@ export interface KnxUltimateClient {
   write(groupAddress: string, value: KnxValue, dpt: string): void;
   on(event: "connected", cb: () => void): KnxUltimateClient;
   on(event: "error", cb: (err: unknown) => void): KnxUltimateClient;
-  on(event: "indication", cb: (packet: KnxUltimateIndication) => void): KnxUltimateClient;
+  on(event: "indication", cb: (packet: KnxUltimateIndication, echoed?: boolean) => void): KnxUltimateClient;
   off(event: "connected", cb: () => void): KnxUltimateClient;
   off(event: "error", cb: (err: unknown) => void): KnxUltimateClient;
 }
@@ -593,6 +593,7 @@ export interface KnxUltimateIndication {
       dataValue?: Buffer;
       isGroupWrite?: boolean;
       isGroupResponse?: boolean;
+      isGroupRead?: boolean;
     };
   };
 }
@@ -604,7 +605,13 @@ interface KnxUltimateObserver {
 
 export function wrapKnxUltimate(client: KnxUltimateClient, dptlib: KnxUltimateDptLib): KnxConnection {
   const observers = new Map<string, KnxUltimateObserver[]>();
-  client.on("indication", (packet) => {
+  client.on("indication", (packet, echoed) => {
+    // § D7/D8 (knxultimate 6.0.1 source, not hardware): the client emits an `indication` for its OWN outgoing telegrams with `echoed = true`
+    // (KNXClient.js write/respond/read paths) — a transmission is not a device report, so it must never become observed state; and a
+    // GroupValueRead carries a meaningless `dataValue` (apci & 0x3f) that decodes as 0/false. Only a positively identified echo or read is
+    // skipped: anything the library does not flag is delivered exactly as before.
+    if (echoed === true) return;
+    if (packet.cEMIMessage?.npdu?.isGroupRead === true) return;
     const cemi = packet.cEMIMessage;
     const dst = cemi?.dstAddress?.toString?.();
     const raw = cemi?.npdu?.dataValue;

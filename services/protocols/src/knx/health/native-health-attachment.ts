@@ -35,6 +35,9 @@ export class NativeKnxHealthAttachment {
   readonly monitor: KnxHealthMonitor;
   private reads: ReadOnlyBusPort | null = null;
   private sub: TelegramSubscription | null = null;
+  /** Identity of the link-up the current subscription belongs to: a stale cleanup (an older link, or another connection) must not tear down a newer one. */
+  private token: object | null = null;
+  private disposed = false;
   private linkUps = 0;
   private linkDowns = 0;
   private refused = 0;
@@ -55,20 +58,31 @@ export class NativeKnxHealthAttachment {
 
   /** Pass as `NativeKnxConnectionOptions.onLinkUp`. */
   readonly onLinkUp: NonNullable<NativeKnxConnectionOptions["onLinkUp"]> = ({ bus, reads }) => {
+    if (this.disposed) return undefined;              // a disposed attachment never re-attaches
     this.release();                                   // defensive: never two attachments, whatever happened before
+    const token = {};
+    this.token = token;
     this.linkUps++;
     this.reads = reads;
     this.sub = bus.subscribe((t) => this.monitor.observeTelegram({ source: t.source, destination: t.destination, service: t.service }), { label: "health-monitor" });
     this.monitor.setPath({ gateway: "reachable", interface: "up" });
     this.monitor.start();                             // idempotent: exactly one loop
-    return () => this.onLinkDown();
+    return () => { if (this.token === token) this.onLinkDown(); };
   };
 
   diagnostics(): NativeHealthAttachmentDiagnostics {
     return { attached: this.reads !== null, linkUps: this.linkUps, linkDowns: this.linkDowns, subscriptions: this.sub?.active ? 1 : 0, monitorRunning: this.monitor.isRunning, readsRefused: this.refused };
   }
 
+  /** Final and idempotent: releases the subscription, stops the monitor and refuses any later link-up. Does not touch the connection. */
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    if (this.token) this.onLinkDown(); else this.monitor.stop();
+  }
+
   private onLinkDown(): void {
+    this.token = null;
     this.linkDowns++;
     this.release();
     this.monitor.stop();                              // cancels pending probes; evidence and budgets survive

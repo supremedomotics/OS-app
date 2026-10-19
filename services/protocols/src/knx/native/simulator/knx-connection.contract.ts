@@ -106,20 +106,20 @@ export function defineKnxConnectionContract(label: "legacy" | "native", make: ()
       expect(got).toEqual(native() ? [] : [true]);
     });
 
-    it("D7 the connection's own write is NOT feedback — legacy delivers the library's echo of it to observers; native never does [LEGACY-DEFECT: infers state from transport acceptance]", async () => {
+    it("D7 the connection's own write is NOT feedback — neither implementation delivers the library's echo of it to observers [was a LEGACY-DEFECT until the wrapper ignored `echoed = true`; library-source evidence, not hardware]", async () => {
       await start();
       const echoes: KnxValue[] = [];
       h.connection.observe("1/0/1", "DPT1.001", (v) => echoes.push(v));
       await h.write("1/0/1", true, "DPT1.001");
-      expect(echoes).toEqual(native() ? [] : [true]);
+      expect(echoes).toEqual([]);
     });
 
-    it("D8 a GroupValueRead is not a value — legacy hands it to observers as 0/false (library NPDU.dataValue); native ignores reads [LEGACY-DEFECT]", async () => {
+    it("D8 a GroupValueRead is not a value — neither implementation hands it to observers [was a LEGACY-DEFECT (delivered 0/false) until the wrapper skipped indications flagged isGroupRead]", async () => {
       await start();
       const got: KnxValue[] = [];
       h.connection.observe("1/1/1", "DPT1.001", (v) => got.push(v));
       await h.deviceReads("1/1/1");
-      expect(got).toEqual(native() ? [] : [false]);
+      expect(got).toEqual([]);
       if (native()) expect(h.decodeFailures()).toEqual({}); // ignored by service filter, not by an incidental decode error
     });
 

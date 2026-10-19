@@ -4,6 +4,15 @@
 > what changed *since the previous handoff*, not the whole project history (that's
 > `PROJECT_CONTEXT.md`). Keep it concise.
 
+## Session: KNX D7 command-echo semantics, health factory lifecycle, real-wrapper cancellation (simulator + loopback; NOT hardware; NOT committed)
+
+Start HEAD `cc3d096` on `claude/great-keller-fmenbn`, clean. Nothing committed/pushed. `knxultimate`, manifests, lockfile, flags, secure code, UDP wire code, bootstrap/registration, Matter/Apple TV untouched. Details: parity plan §11.
+**D7/D8:** driver semantics already correct (command ⇒ `commanded`, never state; only declared-status telegrams ⇒ `observed`). Legacy `wrapKnxUltimate` now skips `echoed === true` and `isGroupRead === true` indications (library-source evidence); 10 new `state-semantics.test.ts` tests on both implementations; contract D7/D8 now equal on both sides. Behavioural consequence for shared-GA devices recorded; no origin filter invented.
+**Health:** `createNativeConnectionWithHealth` (pair owned by the caller, refuses own `onLinkUp`, final idempotent `dispose()`), attachment `dispose()` + stale-cleanup tokens; 7 tests (failed start, dispose mid-connect, reconnects, shutdown, replacement, misuse). Unwired.
+**Real library:** `real-wrapper-cancel.test.ts` (3, real knxultimate + loopback UDP + fake gateway): wrapper `connect()` never settles after mid-connect `Disconnect()`; driver releases the caller <500 ms, no UDP/timer residue, retry works, late response cannot activate; without the driver race two tests hang. Not a gateway.
+**Real packets:** `real-library-packets.test.ts` (6): real `knxultimate` parser → real client `indication` → real wrapper → driver; write/response observed, read and `echoed` not; mutation-checked. Note: `state-semantics.test.ts` sends `{action:"set"}` which writes `false`; flagged, not changed.
+**Remaining:** hardware H-1…H-6 (H-2 orphan, H-4 echo relay/attribution); manual mid-connect cancel on a real gateway; gateway e2e unloadable here; DPT spec text; production factory + owner decision on D7 veto.
+
 ## Session: KNX corrective milestone after d9a113a — one-slot race, health ownership, driver link state, parity evidence (simulator-tested; NOT committed/pushed, NOT registered, NOT hardware-tested)
 
 Start HEAD `d9a113a` on `claude/great-keller-fmenbn`. **Nothing committed, pushed, PR'd or merged** (not requested). Native driver stays off: `knxultimate`, lockfile, `package.json`, flags, `policy.ts`, production registration, secure code and UDP wire behaviour unchanged.

@@ -41,6 +41,8 @@ export interface ContractHarness {
   /** Native only: strict-decode failures by code. */
   decodeFailures(): Record<string, number> | null;
   close(): Promise<void>;
+  /** Lets a promise that needs the transport to make progress settle (native: advances virtual time; legacy: identity). */
+  settle<T>(p: Promise<T>): Promise<T>;
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------------- legacy
@@ -99,6 +101,7 @@ export function legacyHarness(): ContractHarness {
     escapedErrors: () => escaped,
     decodeFailures: () => null,
     close: async () => undefined,
+    settle: (p) => p,
   };
 }
 
@@ -133,6 +136,7 @@ export function nativeHarness(): ContractHarness {
     failedConnectResidue: () => { const l = w.leaks(); return l.timers + l.sockets + l.channels; },
     escapedErrors: () => [],
     decodeFailures: () => conn.diagnostics().decodeFailures,
+    settle: (p) => w.until(p, 2_000),
     close: async () => { await w.until(conn.disconnect()); await w.clock.advance(300_000); w.iface.shutdown(); },
   };
 }
