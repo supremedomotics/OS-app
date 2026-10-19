@@ -65,6 +65,8 @@ export class SupervisedTunnel {
   private tunnelsCreated = 0;
   private ignoredFrames = 0;
   private readonly listeners = new Set<(e: LinkEvent) => void>();
+  /** Handshakes (and the orderly close of a discarded tunnel) that have been started and not yet finished — what {@link quiesced} waits for. */
+  private readonly unsettled = new Set<Promise<void>>();
 
   constructor(private readonly o: SupervisedTunnelOptions) {
     this.manager = new ConnectionManager({
@@ -132,6 +134,25 @@ export class SupervisedTunnel {
     return this.closing;
   }
 
+  /**
+   * Resolves `true` once no handshake started by this supervisor is still unfinished (each one ends in an attached tunnel or in an orderly
+   * DISCONNECT of the discarded one), `false` if that did not happen within `timeoutMs`. Never rejects, never cancels anything, does not
+   * affect disconnect(): disconnect() releases the caller at once, this is a SEPARATE, bounded wait for a successor that shares a one-slot
+   * gateway (the gateway holds the predecessor's slot until its CONNECT_RESPONSE is received and the channel closed).
+   */
+  async quiesced(timeoutMs: number): Promise<boolean> {
+    if (this.unsettled.size === 0) return true;
+    let timer: ReturnType<Clock["setTimeout"]> | null = null;
+    const expired = new Promise<false>((resolve) => { timer = this.o.clock.setTimeout(() => resolve(false), timeoutMs); });
+    try {
+      for (;;) {
+        if (this.unsettled.size === 0) return true;
+        const r = await Promise.race([Promise.all([...this.unsettled]).then(() => true as const), expired]);
+        if (r === false) return false;
+      }
+    } finally { if (timer) this.o.clock.clearTimeout(timer); }
+  }
+
   diagnostics(): SupervisedTunnelDiagnostics {
     return {
       link: this.link, supervisor: this.manager.metrics(), tunnelsCreated: this.tunnelsCreated, attachedTunnels: this.tunnel ? 1 : 0,
@@ -141,7 +162,14 @@ export class SupervisedTunnel {
 
   // ------------------------------------------------------------------------------------------------------------------ internals
 
-  private async attempt(): Promise<void> {
+  private attempt(): Promise<void> {
+    const p = this.runAttempt();
+    const done = p.then(() => undefined, () => undefined).then(() => { this.unsettled.delete(done); });
+    this.unsettled.add(done);
+    return p;
+  }
+
+  private async runAttempt(): Promise<void> {
     if (this.closed) throw new KnxTunnelError("closed", "disconnected");
     if (this.tunnel) await this.teardown("superseded"); // never two attachments, whatever happened before
     if (this.closed) throw new KnxTunnelError("closed", "disconnected");
@@ -155,7 +183,7 @@ export class SupervisedTunnel {
     }
     // Cancelled while the handshake was running: close the tunnel orderly and RETURN (not throw) — the ConnectionManager then treats it as "stop() ran
     // during connect" instead of recording a failed reconnect; the first-connect path rejects its caller itself (see connect()).
-    if (this.candidate !== t || this.closed) { void t.disconnect(); return; }
+    if (this.candidate !== t || this.closed) { await t.disconnect(); return; }
     this.candidate = null;
     if (t.state !== "connected") throw new KnxTunnelError("closed", "tunnel closed during connect"); // closed between the handshake and attach: no listener could have seen it
     this.tunnel = t;

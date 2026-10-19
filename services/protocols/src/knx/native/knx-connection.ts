@@ -25,6 +25,7 @@ import type { KnxConnection } from "../../knx-driver.js";
 import type { KnxValue } from "../../knx-codec.js";
 import { parseGroupAddress } from "./address.js";
 import { decodeDpt, encodeDpt, isSupportedDpt, KnxDptError } from "./dpt.js";
+import { ReadBudget, type ReadBudgetOptions, type ReadBudgetStats } from "./read-budget.js";
 import { NativeTelegramBus, type TelegramBusOptions, type TelegramBusStats } from "./telegram-bus.js";
 import { SupervisedTunnel, type LinkEvent, type LinkState, type SupervisedTunnelDiagnostics } from "./supervised-tunnel.js";
 import { KnxTunnelError, type ConfirmationOutcome, type KnxTunnelClient, type TunnelErrorCode } from "./tunnel-client.js";
@@ -67,6 +68,14 @@ export type NativeReadResult =
   | { outcome: "timeout" }
   | { outcome: "cancelled"; reason: "aborted" | "disconnected" };
 
+/**
+ * What the `onLinkUp` hook receives to probe the bus: GroupValueRead ONLY (there is deliberately no write method), drawn from the connection's own
+ * read budget and refused on an observe-only connection. `confirmation` never rejects and is not a statement about the device.
+ */
+export interface ReadOnlyBusPort {
+  readGroup(destination: number): Promise<{ confirmation: Promise<ConfirmationOutcome> }>;
+}
+
 export interface NativeKnxConnectionOptions {
   /** Builds a NEW, not yet connected tunnel for every attempt (the tunnel client is single-use). */
   createTunnel: () => KnxTunnelClient;
@@ -74,6 +83,8 @@ export interface NativeKnxConnectionOptions {
   mode?: "active" | "observe_only";
   reconnect?: { minBackoffMs?: number; maxBackoffMs?: number; random?: () => number };
   bus?: Omit<TelegramBusOptions, "clock">;
+  /** Shared by read() and the health port; `maxConcurrent` defaults to {@link NativeKnxConnectionOptions.maxPendingReads}. */
+  readBudget?: ReadBudgetOptions;
   /** Default read() budget (3 s). */
   readTimeoutMs?: number;
   /** Concurrent read() cap (64). */
@@ -83,7 +94,7 @@ export interface NativeKnxConnectionOptions {
    * link-down or on disconnect(), exactly once. This is how a health monitor attaches without owning a second tunnel and without outliving
    * the link it was started for.
    */
-  onLinkUp?: (ctx: { tunnel: KnxTunnelClient; bus: NativeTelegramBus }) => void | (() => void);
+  onLinkUp?: (ctx: { tunnel: KnxTunnelClient; bus: NativeTelegramBus; reads: ReadOnlyBusPort }) => void | (() => void);
 }
 
 export interface NativeConnectionDiagnostics {
@@ -98,6 +109,7 @@ export interface NativeConnectionDiagnostics {
   /** The most recent rejected observer registrations (bounded, newest last). */
   lastRejectedObservers: Array<{ groupAddress: string; dpt: string; reason: string }>;
   hookErrors: number;
+  readBudget: ReadBudgetStats;
 }
 
 const bump = (m: Record<string, number>, k: string): void => { m[k] = (m[k] ?? 0) + 1; };
@@ -109,7 +121,7 @@ export class NativeKnxConnection implements KnxConnection {
   private readonly clock: Clock;
   private readonly mode: "active" | "observe_only";
   private readonly readTimeoutMs: number;
-  private readonly maxPendingReads: number;
+  private readonly budget: ReadBudget;
   private readonly pendingReads = new Set<{ cancel(reason: "aborted" | "disconnected"): void }>();
   private disconnecting: Promise<void> | null = null;
   private hookCleanup: (() => void) | null = null;
@@ -124,7 +136,7 @@ export class NativeKnxConnection implements KnxConnection {
     this.clock = o.clock ?? systemClock;
     this.mode = o.mode ?? "active";
     this.readTimeoutMs = o.readTimeoutMs ?? 3_000;
-    this.maxPendingReads = o.maxPendingReads ?? 64;
+    this.budget = new ReadBudget(this.clock, { maxConcurrent: o.maxPendingReads ?? 64, ...o.readBudget });
     this.bus = new NativeTelegramBus({ ...o.bus, clock: this.clock });
     this.link = new SupervisedTunnel({ clock: this.clock, createTunnel: o.createTunnel, bus: this.bus, ...(o.reconnect ? { reconnect: o.reconnect } : {}) });
     this.link.onLinkChange((e) => this.onLink(e));
@@ -135,6 +147,9 @@ export class NativeKnxConnection implements KnxConnection {
   onLinkChange(l: (e: LinkEvent) => void): () => void { return this.link.onLinkChange(l); }
 
   async connect(): Promise<void> { await this.link.connect(); }
+
+  /** Bounded wait for an unfinished handshake to end (see {@link SupervisedTunnel.quiesced}); `false` = still unfinished after `timeoutMs`. */
+  quiesced(timeoutMs: number): Promise<boolean> { return this.link.quiesced(timeoutMs); }
 
   async disconnect(): Promise<void> {
     if (this.disconnecting) return this.disconnecting;
@@ -176,22 +191,25 @@ export class NativeKnxConnection implements KnxConnection {
     this.assertActive("read");
     const destination = this.parseGa(groupAddress);
     if (!isSupportedDpt(dpt)) throw new KnxConnectionError("invalid_dpt", "not_sent", `unsupported datapoint type "${dpt}"`);
-    if (this.pendingReads.size >= this.maxPendingReads) throw new KnxConnectionError("read_limit", "not_sent", `${this.maxPendingReads} reads already pending`);
     if (opts.signal?.aborted) { this.reads.cancelled++; return { outcome: "cancelled", reason: "aborted" }; }
+    const grant = this.budget.acquire("sync");
+    if (typeof grant === "string") throw new KnxConnectionError("read_limit", "not_sent", `read budget exhausted (${grant})`);
     return new Promise<NativeReadResult>((resolve, reject) => {
       let done = false;
       let timer: TimerHandle | null = null;
       const entry = { cancel: (reason: "aborted" | "disconnected") => settle({ outcome: "cancelled", reason }) };
       const onAbort = (): void => entry.cancel("aborted");
-      const sub = this.bus.subscribe((t) => {
+      let sub: ReturnType<NativeTelegramBus["subscribe"]>;
+      try { sub = this.bus.subscribe((t) => {
         let value: KnxValue;
         try { value = decodeDpt(dpt, t.data!); } catch (e) { this.noteDecodeFailure(e); return; } // a malformed response is not an answer; keep waiting
         settle({ outcome: "value", value, source: t.source, seq: t.seq, receivedAt: t.receivedAt });
-      }, { destination, services: ["response"] });
+      }, { destination, services: ["response"] }); } catch (e) { grant.release(); throw e; } // e.g. subscription_limit: the budget slot must not leak
       const settle = (r: NativeReadResult | Error): void => {
         if (done) return;
         done = true;
         if (timer) this.clock.clearTimeout(timer);
+        grant.release();
         sub.unsubscribe();
         opts.signal?.removeEventListener("abort", onAbort);
         this.pendingReads.delete(entry);
@@ -206,6 +224,20 @@ export class NativeKnxConnection implements KnxConnection {
       this.link.send({ destination, service: "read" }).then(() => undefined, (e) => settle(this.asConnectionError(e)));
     });
   }
+
+  /** The health monitor's only bus access (see {@link ReadOnlyBusPort}). Its budget slot is held until the interface has confirmed (or failed to confirm) the frame. */
+  private readonly healthPort: ReadOnlyBusPort = {
+    readGroup: async (destination) => {
+      this.assertActive("read");
+      const grant = this.budget.acquire("health");
+      if (typeof grant === "string") throw new KnxConnectionError("read_limit", "not_sent", `read budget exhausted (${grant})`);
+      try {
+        const r = await this.link.send({ destination, service: "read" });
+        void r.confirmation.then(() => grant.release());
+        return { confirmation: r.confirmation };
+      } catch (e) { grant.release(); throw this.asConnectionError(e); }
+    },
+  };
 
   // ------------------------------------------------------------------------------------------------------------------ observers
 
@@ -237,7 +269,7 @@ export class NativeKnxConnection implements KnxConnection {
     return {
       mode: this.mode, link: this.link.diagnostics(), bus: this.bus.stats(), writes: { ...this.writes },
       reads: { ...this.reads, pending: this.pendingReads.size }, decodeFailures: { ...this.decodeFailures },
-      rejectedObservers: this.rejected, lastRejectedObservers: [...this.lastRejected], hookErrors: this.hookErrors,
+      rejectedObservers: this.rejected, lastRejectedObservers: [...this.lastRejected], hookErrors: this.hookErrors, readBudget: this.budget.stats(),
     };
   }
 
@@ -246,7 +278,7 @@ export class NativeKnxConnection implements KnxConnection {
   private onLink(e: LinkEvent): void {
     if (e.state === "up" && e.tunnel && this.o.onLinkUp) {
       this.runCleanup(); // defensive: never two live attachments
-      try { const c = this.o.onLinkUp({ tunnel: e.tunnel, bus: this.bus }); this.hookCleanup = typeof c === "function" ? c : null; } catch { this.hookErrors++; }
+      try { const c = this.o.onLinkUp({ tunnel: e.tunnel, bus: this.bus, reads: this.healthPort }); this.hookCleanup = typeof c === "function" ? c : null; } catch { this.hookErrors++; }
     } else if (e.state === "down") this.runCleanup();
   }
 

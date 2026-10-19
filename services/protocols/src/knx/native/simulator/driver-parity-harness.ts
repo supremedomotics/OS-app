@@ -137,6 +137,7 @@ export class NativeDriverBus implements DriverBus {
     if (process.env.KNX_PARITY_REPORT) {
       const a = this.anomalies();
       if (Object.keys(a.decodeFailures).length || a.rejectedObservers || a.listenerErrors) process.stderr.write(`PARITY-ANOMALY ${expect_name()} ${JSON.stringify(a)}\n`);
+      process.stderr.write(`PARITY-ROW ${JSON.stringify({ test: expect_name(), ...a, writesOnWire: this.writes.length })}\n`); // one row per test: the evidence behind docs/knx/knx-native-group-parity-plan.md §6.1
     }
     await this.conn.disconnect();
     this.world.iface.shutdown();

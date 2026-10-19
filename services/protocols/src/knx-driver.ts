@@ -34,7 +34,18 @@ import { colorModesFromDpt } from "./knx/capability-mapper.js";
  * injected or loaded from `knxultimate`; this keeps the byte-level DPT framing in
  * the transport and lets the driver be unit-tested against a fake bus.
  */
+/**
+ * Optional link state of a connection that supervises its own recovery (the native connection). A connection without it (the legacy
+ * `knxultimate` wrapper, test fakes) is treated as "up" for as long as it exists, exactly as before.
+ */
+export type KnxLinkState = "idle" | "connecting" | "up" | "recovering" | "closed";
+
+/** What the driver reports about its bus link: `connecting` = first attempt in flight; `recovering` = an established link was lost and its owner is bringing it back. */
+export type KnxDriverConnectionState = "disconnected" | "connecting" | "connected" | "recovering";
+
 export interface KnxConnection {
+  /** Present only on connections that supervise their own recovery; read live, never cached. */
+  readonly linkState?: KnxLinkState;
   connect(): Promise<void>;
   disconnect(): Promise<void>;
   /** Group-write a decoded value to a group address with the given DPT. */
@@ -167,6 +178,12 @@ export class KnxProtocolDriver implements INativeProtocolDriver {
   readonly protocol = "knx";
   private conn: KnxConnection | null = null;
   private connecting: Promise<void> | null = null;
+  /** The connection of the in-flight connect(), so disconnect() can cancel it before the driver has kept it. */
+  private pending: KnxConnection | null = null;
+  /** Rejects the in-flight connect() promptly even if the connection's own connect() never settles after being disconnected (the legacy wrapper waits for an event). */
+  private cancelConnect: (() => void) | null = null;
+  /** Bumped by every disconnect(): a connect() that started in an earlier epoch must not become the live connection. */
+  private epoch = 0;
   private readonly opts: KnxDriverOptions;
   private readonly bindings: KnxBinding[] = [];
   private readonly devices = new Set<DeviceId>();
@@ -178,6 +195,12 @@ export class KnxProtocolDriver implements INativeProtocolDriver {
   }
 
   async connect(): Promise<void> {
+    // A connection that reports itself permanently closed (e.g. replaced by a newer one) is dropped so this caller's retry can build a new one;
+    // a "recovering" one is deliberately kept: its owner reconnects it, a second tunnel would only compete for the gateway's slot.
+    if (this.conn && this.conn.linkState === "closed") {
+      for (const b of this.bindings) { b.unsubscribe?.(); b.unsubscribe = undefined; for (const r of b.hvacRoles) { r.unsubscribe?.(); r.unsubscribe = undefined; } }
+      this.conn = null;
+    }
     if (this.conn) return;
     // § Real production bug (live-reported, "No More Connections" recurring ~60s apart —
     // matching reconcileDriverConnectivity()'s retry interval): the guard above only blocks
@@ -189,9 +212,18 @@ export class KnxProtocolDriver implements INativeProtocolDriver {
     // connection, so overlapping attempts self-DoS the driver's own single slot. Every
     // caller now awaits the SAME in-flight attempt instead of starting a new one.
     if (this.connecting) return this.connecting;
+    const epoch = this.epoch;
+    const cancelled = (): Error => new Error("knx: disconnected during connect");
+    let abort!: (e: Error) => void;
+    const aborted = new Promise<never>((_, reject) => { abort = reject; });
+    const mine = (): void => abort(cancelled());
+    this.cancelConnect = mine;
+    aborted.catch(() => undefined);
     this.connecting = (async () => {
       const factory = this.opts.createConnection ?? defaultKnxConnection;
       const conn = await factory({ host: this.opts.host, port: this.opts.port ?? 3671 });
+      if (epoch !== this.epoch) { await conn.disconnect().catch(() => undefined); throw cancelled(); } // disconnect() ran while the factory was working
+      this.pending = conn;
       // § Real production bug: `this.conn` was previously assigned before `conn.connect()`
       // was confirmed to succeed. A failed connect (e.g. a KNXnet/IP gateway rejecting with
       // "No More Connections") left `this.conn` truthy anyway, so every subsequent connect()
@@ -199,24 +231,45 @@ export class KnxProtocolDriver implements INativeProtocolDriver {
       // guard above, and isConnected() (which also just checks nullness) wrongly reported
       // connected. Only assign `this.conn` once `connect()` has actually succeeded, so a
       // failed attempt leaves the driver honestly disconnected and retryable.
-      await conn.connect();
+      const attempt = conn.connect();
+      attempt.catch(() => undefined); // if the race below is lost to a cancellation, a later failure of this attempt is not an unhandled rejection
+      try { await Promise.race([attempt, aborted]); } finally { if (this.pending === conn) this.pending = null; }
+      if (epoch !== this.epoch) { await conn.disconnect().catch(() => undefined); throw cancelled(); } // a connection that ignores cancellation must not go live
       this.conn = conn;
       for (const b of this.bindings) this.observe(b);
     })();
+    const attemptPromise = this.connecting;
     try {
-      await this.connecting;
+      await attemptPromise;
     } finally {
-      this.connecting = null;
+      // A cancelled attempt can finish after a newer one has started: only clear what is still ours.
+      if (this.connecting === attemptPromise) this.connecting = null;
+      if (this.cancelConnect === mine) this.cancelConnect = null;
     }
   }
 
   async disconnect(): Promise<void> {
+    this.epoch++;
+    this.cancelConnect?.();
+    const pending = this.pending;
+    this.pending = null;
+    await pending?.disconnect(); // cancels an in-flight connect() (its caller is rejected) instead of letting it finish and go live
     await this.conn?.disconnect();
     this.conn = null;
   }
 
+  /** True only while the bus link is actually up — not merely because a connection object exists. */
   isConnected(): boolean {
-    return this.conn !== null;
+    return this.connectionState() === "connected";
+  }
+
+  connectionState(): KnxDriverConnectionState {
+    if (!this.conn) return this.connecting ? "connecting" : "disconnected";
+    switch (this.conn.linkState) {
+      case undefined: case "up": return "connected";
+      case "recovering": return "recovering";
+      default: return "disconnected";
+    }
   }
 
   async bind(binding: ProtocolBinding): Promise<void> {

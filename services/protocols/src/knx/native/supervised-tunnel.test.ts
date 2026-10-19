@@ -111,3 +111,51 @@ describe("SupervisedTunnel cancellation races (stub tunnel)", () => {
     await s.disconnect();
   });
 });
+
+describe("SupervisedTunnel.quiesced() — bounded settlement of an unfinished handshake (stub tunnel)", () => {
+  it("is true at once when nothing is in flight", async () => {
+    const s = make();
+    expect(await s.quiesced(1_000)).toBe(true);
+    await s.disconnect();
+  });
+
+  it("disconnect() stays prompt; quiesced() waits for the handshake to end AND for the discarded tunnel to be closed, then reports true", async () => {
+    const s = make();
+    const p = s.connect(); p.catch(() => undefined);
+    await clock.flush();
+    await s.disconnect();                                // returns without waiting for the handshake
+    let done: boolean | null = null;
+    void s.quiesced(60_000).then((r) => { done = r; });
+    await clock.advance(5_000);
+    expect(done).toBeNull();                             // handshake still unfinished
+    created[0]!.finish();
+    await clock.advance(1);
+    expect(done).toBe(true);
+    expect(created[0]!.disconnects).toBeGreaterThanOrEqual(1);
+  });
+
+  it("is bounded: false at the timeout, without cancelling anything or leaving its own timer behind", async () => {
+    const s = make();
+    const p = s.connect(); p.catch(() => undefined);
+    await clock.flush();
+    await s.disconnect();
+    const r = s.quiesced(2_000);
+    await clock.advance(2_000);
+    expect(await r).toBe(false);
+    expect(created[0]!.disconnects).toBe(0);             // the late tunnel is still the supervisor's to close
+    created[0]!.finish();
+    await clock.advance(1);
+    expect(created[0]!.disconnects).toBeGreaterThanOrEqual(1);
+    expect(await s.quiesced(2_000)).toBe(true);
+  });
+
+  it("a refused handshake settles too (nothing to discard)", async () => {
+    const s = make();
+    const p = s.connect(); p.catch(() => undefined);
+    await clock.flush();
+    created[0]!.refuse(new Error("no more connections"));
+    await expect(p).rejects.toThrow();
+    expect(await s.quiesced(1_000)).toBe(true);
+    await s.disconnect();
+  });
+});
